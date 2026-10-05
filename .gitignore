@@ -357,8 +357,8 @@ $RECYCLE.BIN/
 /test/pic_test/
 demo*.mp4
 out*.mp4
-test*.py
-test_*.mp4
+/test*.py
+/test_*.mp4
 test*_no_sub*.mp4
 /test/coods/
 /local_test/
