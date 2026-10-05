@@ -376,4 +376,8 @@ inference.onnx
 /backend/ffmpeg/linux_x64/ffmpeg
 /backend/ffmpeg/macos/ffmpeg
 /backend/ffmpeg/win_x64/*.exe
+/backend/ffmpeg/win_x64/fs_manifest.csv
 /artifacts/
+/.condarc
+/test/*.mp4
+/test/*.png
