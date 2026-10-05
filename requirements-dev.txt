@@ -1,0 +1,2 @@
+# Development and regression-test tooling. Runtime dependencies remain in requirements.txt.
+pytest>=8.0

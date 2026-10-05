@@ -1,0 +1,23 @@
+CleanCanvas Studio
+Copyright 2026 CleanCanvas Studio contributors
+
+This product is an independently maintained derivative work. It is not
+affiliated with, endorsed by, or an official release of any upstream project
+named below.
+
+This product includes portions derived from or substantially based on:
+
+1. video-subtitle-remover
+   Copyright YaoFANGUK and contributors.
+   Source: https://github.com/YaoFANGUK/video-subtitle-remover
+   License: Apache License 2.0.
+
+2. IOPaint
+   Copyright IOPaint contributors.
+   Source: https://github.com/Sanster/IOPaint
+   License: Apache License 2.0.
+
+Additional third-party software, model sources, and redistribution notes are
+listed in THIRD_PARTY_NOTICES.md. Model weights are not bundled by default;
+their code licenses do not by themselves grant a right to redistribute model
+weights.

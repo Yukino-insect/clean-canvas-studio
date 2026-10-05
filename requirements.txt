@@ -1,0 +1,14 @@
+filesplit==3.0.2
+opencv-python==4.11.0.86
+tqdm==4.67.1
+pyside6-fluent-widgets==1.7.7
+numpy==2.2.5
+Pillow>=10.0
+paddlepaddle==3.0.0
+paddleocr==3.4.0
+requests
+darkdetect
+je-showinfilemanager==1.1.6a4
+# AI repair/enhancement modes require PyTorch. Choose the wheel matching the user's
+# CUDA driver from https://pytorch.org/get-started/locally/ when packaging for GPU.
+torch>=2.2
