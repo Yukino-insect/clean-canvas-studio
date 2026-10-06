@@ -184,11 +184,3 @@ CleanCanvas Studio 是基于 [YaoFANGUK/video-subtitle-remover](https://github.c
 源码或二进制发行物应一并提供 [LICENSE](LICENSE)、[NOTICE](NOTICE)、[MODIFICATIONS.md](MODIFICATIONS.md)、[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与适用的 [第三方许可证文本](THIRD_PARTY_LICENSES)。Real-ESRGAN、BasicSR、FFmpeg、OpenCV、PaddleOCR/PaddlePaddle、PyTorch 及模型权重存在独立许可边界；发布包含模型、二进制或素材的安装包前，必须基于实际打包版本重新核验并补齐其许可证与 NOTICE。
 
 参与贡献、报告问题与安全漏洞的方式分别见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [SECURITY.md](SECURITY.md)。
-
-## 延伸文档
-
-- [图像与视频升级设计](docs/AI_IMAGE_VIDEO_UPGRADE_TASKS.md)
-- [精确多边形掩膜设计](docs/PRECISE_MASK_UPGRADE_TASKS.md)
-- [OCR、图像修复与超分辨率模型说明](docs/AI_MODELS_EXPLANATION_AND_STUDY_GUIDE.md)
-- [系统架构与技术说明](docs/PROJECT_STUDY_AND_GRADUATE_INTERVIEW_GUIDE.md)
-- [问题与解决方案记录](docs/ISSUES_AND_SOLUTIONS.md)

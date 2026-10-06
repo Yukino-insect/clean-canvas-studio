@@ -7,6 +7,7 @@ import threading
 import multiprocessing
 import time
 import traceback
+from queue import Empty
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
 from PySide6.QtCore import Slot, QRect, Signal
 from PySide6 import QtCore, QtWidgets
@@ -26,6 +27,47 @@ from backend.tools.subtitle_remover_remote_call import SubtitleRemoverRemoteCall
 from backend.tools.process_manager import ProcessManager
 from backend.tools.common_tools import get_readable_path, is_image_file, read_image
 
+
+def detect_ocr_in_process(result_queue, task_path, frame):
+    """在独立进程中检测单帧 OCR，避免模型推理占用 GUI 进程。
+
+    PaddleOCR 的模型初始化及 CPU 推理会大量占用 Python/原生线程。即使从
+    ``threading.Thread`` 调用，它仍可能因 GIL 与 CPU 竞争而使主事件循环
+    迟迟得不到调度。进程边界既隔离了该负载，也保证子进程不会直接触碰 Qt
+    控件；结果只通过可序列化的数据返回。
+    """
+    try:
+        # OCR 只是交互式预览阶段的后台工作；在 CPU 核心紧张时，让窗口事件
+        # 循环优先获得调度时间，避免“进程分开了但拖动/点击仍明显迟滞”。
+        try:
+            if os.name == "nt":
+                import ctypes
+                below_normal_priority = 0x00004000
+                ctypes.windll.kernel32.SetPriorityClass(
+                    ctypes.windll.kernel32.GetCurrentProcess(),
+                    below_normal_priority,
+                )
+            else:
+                os.nice(5)
+        except OSError:
+            # 优先级属于体验优化；系统拒绝调整时仍应正常完成检测。
+            pass
+
+        from backend.tools.subtitle_detect import SubtitleDetect
+
+        polygons = SubtitleDetect(task_path, []).detect_polygons(frame)
+        result_queue.put({
+            "polygons": [polygon.to_dict() for polygon in polygons],
+            "error": None,
+        })
+    except BaseException as exc:
+        # Exception 对象本身不一定可 pickle；保留类型可使错误提示仍可诊断。
+        result_queue.put({
+            "polygons": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+
+
 class HomeInterface(QWidget):
     # Carry the task index with every progress event.  Progress originates in
     # child/worker threads and can be delivered after the worker has already
@@ -40,7 +82,6 @@ class HomeInterface(QWidget):
     toggle_buttons_signal = Signal(bool)  # True=显示运行按钮, False=显示停止按钮
     task_status_signal = Signal(int, object)  # (task_index, TaskStatus)
     select_task_signal = Signal(int)  # task_index
-    ocr_detection_finished_signal = Signal(int, object, object)  # task index, regions, error
     def __init__(self, parent=None):
         # 这里的 parent 传的是父组件
         super().__init__(parent=parent)
@@ -66,6 +107,16 @@ class HomeInterface(QWidget):
         self._worker_thread = None
         self.running_process = None
         self._video_cap_lock = threading.Lock()  # 保护 video_cap 的线程锁
+        # OCR 使用独立进程而不是 Python 线程：模型推理不应抢占 Qt 主线程。
+        # 定时器仅在主线程轮询 IPC 队列，因此所有控件更新仍遵守 Qt 线程规则。
+        self._ocr_process = None
+        self._ocr_process_id = None
+        self._ocr_result_queue = None
+        self._ocr_task_index = -1
+        self._ocr_exit_poll_count = 0
+        self._ocr_result_timer = QtCore.QTimer(self)
+        self._ocr_result_timer.setInterval(50)
+        self._ocr_result_timer.timeout.connect(self._poll_ocr_detection_result)
 
         # 当前正在处理的任务索引
         # -1 代表没有任务正在处理
@@ -86,7 +137,6 @@ class HomeInterface(QWidget):
         self.toggle_buttons_signal.connect(self._toggle_buttons)
         self.task_status_signal.connect(lambda idx, status: self.task_list_component.update_task_status(idx, status))
         self.select_task_signal.connect(self.task_list_component.select_task)
-        self.ocr_detection_finished_signal.connect(self._on_ocr_detection_finished)
 
     def __init_widgets(self):
         """创建主页面"""
@@ -277,7 +327,11 @@ class HomeInterface(QWidget):
             self.task_list_component.update_task_option(get_current_task_index, TaskOptions.MASK_PLAN, None)
 
     def detect_current_frame_ocr(self):
-        """异步检测当前帧，完成后把 OCR 框回显到现有可编辑选框层。"""
+        """在独立进程中检测当前帧，并在完成后回显可编辑选框。"""
+        if self._ocr_process is not None:
+            # 按钮通常已禁用；此保护也覆盖快捷键或外部代码的重复调用。
+            self.append_output("当前 OCR 检测尚未完成，请稍候。")
+            return
         task_index = self.task_list_component.get_current_task_index()
         if task_index < 0 or self.current_frame is None:
             self.append_output("请先打开并选择一个图片或视频任务，再进行 OCR 检测。")
@@ -287,17 +341,73 @@ class HomeInterface(QWidget):
             return
         frame = self.current_frame.copy()
         self.detect_ocr_button.setEnabled(False)
-        self.append_output("正在检测当前帧文字位置；检测完成后请在预览中逐框确认、编辑或删除。")
+        self.append_output("正在检测当前帧文字位置；可继续操作界面，检测完成后请在预览中逐框确认、编辑或删除。")
 
-        def detect():
-            try:
-                from backend.tools.subtitle_detect import SubtitleDetect
-                polygons = SubtitleDetect(task.path, []).detect_polygons(frame)
-                self.ocr_detection_finished_signal.emit(task_index, polygons, None)
-            except Exception as exc:
-                self.ocr_detection_finished_signal.emit(task_index, [], exc)
+        self._ocr_task_index = task_index
+        self._ocr_exit_poll_count = 0
+        self._ocr_result_queue = multiprocessing.Queue()
+        self._ocr_process = multiprocessing.Process(
+            target=detect_ocr_in_process,
+            args=(self._ocr_result_queue, task.path, frame),
+            name="CleanCanvasOcrDetection",
+        )
+        try:
+            self._ocr_process.start()
+            self._ocr_process_id = ProcessManager.instance().add_process(self._ocr_process)
+            self._ocr_result_timer.start()
+        except Exception as exc:
+            self._finish_ocr_detection([], f"无法启动 OCR 检测进程：{exc}")
 
-        threading.Thread(target=detect, daemon=True).start()
+    @Slot()
+    def _poll_ocr_detection_result(self):
+        """非阻塞读取 OCR 子进程结果；本方法始终运行在 GUI 线程。"""
+        result_queue = self._ocr_result_queue
+        process = self._ocr_process
+        if result_queue is None or process is None:
+            return
+        try:
+            result = result_queue.get_nowait()
+        except Empty:
+            # 子进程退出和 multiprocessing 队列的后台传输之间可能有短暂间隔。
+            # 给它最多 500ms，避免将一个刚写入的正常结果误判为失败。
+            if not process.is_alive():
+                self._ocr_exit_poll_count += 1
+                if self._ocr_exit_poll_count >= 10:
+                    exit_code = process.exitcode
+                    self._finish_ocr_detection([], f"OCR 检测进程异常结束（退出码 {exit_code}）。")
+            return
+
+        error = result.get("error")
+        polygons = [OcrPolygon.from_dict(item) for item in result.get("polygons", [])]
+        self._finish_ocr_detection(polygons, error)
+
+    def _finish_ocr_detection(self, polygons, error):
+        """收尾 IPC 资源，然后将结果交给既有的主线程 UI 更新逻辑。"""
+        self._ocr_result_timer.stop()
+        process = self._ocr_process
+        process_id = self._ocr_process_id
+        task_index = self._ocr_task_index
+        result_queue = self._ocr_result_queue
+
+        self._ocr_process = None
+        self._ocr_process_id = None
+        self._ocr_result_queue = None
+        self._ocr_task_index = -1
+        self._ocr_exit_poll_count = 0
+
+        if process is not None:
+            # ``start()`` 本身失败时，Process 尚未拥有 pid，不能调用 join().
+            if process.pid is not None:
+                # 已收到结果后无需在 GUI 线程等待子进程收尾；timeout=0 只回收
+                # 已退出的进程，避免最后一次回显也产生可感知的卡顿。
+                process.join(timeout=0)
+        if process_id is not None:
+            ProcessManager.instance().remove_process(process_id)
+        if result_queue is not None:
+            result_queue.close()
+            result_queue.join_thread()
+
+        self._on_ocr_detection_finished(task_index, polygons, error)
 
     @Slot(int, object, object)
     def _on_ocr_detection_finished(self, task_index, polygons, error):
@@ -307,7 +417,15 @@ class HomeInterface(QWidget):
             InfoBar.error("OCR 检测失败", str(error), parent=self, position=InfoBarPosition.TOP, duration=5000)
             return
         if task_index != self.task_list_component.get_current_task_index():
-            self.append_output("OCR 检测已完成；请重新选择对应任务查看结果。")
+            # 检测期间允许切换任务，结果不能因为用户正常操作而白白丢弃。
+            # 不修改当前预览的选框，只持久化到发起检测的任务，待用户返回时再加载。
+            if self.task_list_component.get_task(task_index) is not None:
+                self.task_list_component.update_task_option(task_index, TaskOptions.SUB_AREAS, [])
+                self.task_list_component.update_task_option(task_index, TaskOptions.OCR_POLYGONS, [polygon.to_dict() for polygon in polygons])
+                self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REVIEWED, False)
+                self.task_list_component.update_task_option(task_index, TaskOptions.MANUAL_REGIONS, [])
+                self.task_list_component.update_task_option(task_index, TaskOptions.MASK_PLAN, None)
+                self.append_output("OCR 检测已完成，结果已保存；重新选择对应任务即可查看。")
             return
         regions = [polygon.bbox for polygon in polygons]
         preview_regions = self.video_display_component.video_coordinates_to_preview_coordinates(regions)
@@ -438,7 +556,22 @@ class HomeInterface(QWidget):
         self.video_display_component.set_ab_sections(ab_sections)
         selections = self.task_list_component.get_task_option(index, TaskOptions.SUB_AREAS, [])
         if len(selections) <= 0:
-            self.video_display_component.load_selections_from_config()
+            raw_polygons = self.task_list_component.get_task_option(index, TaskOptions.OCR_POLYGONS, [])
+            if raw_polygons:
+                # OCR 可能在用户切换到另一任务时结束。此时先加载目标媒体，
+                # 再使用其自身的缩放参数转换坐标，不能沿用发起检测时的预览比例。
+                polygons = [OcrPolygon.from_dict(item) for item in raw_polygons]
+                selections = self.video_display_component.video_coordinates_to_preview_coordinates(
+                    [polygon.bbox for polygon in polygons]
+                )
+                self._applying_ocr_result = True
+                try:
+                    self.video_display_component.set_selection_rects(selections)
+                    self.task_list_component.update_task_option(index, TaskOptions.SUB_AREAS, selections)
+                finally:
+                    self._applying_ocr_result = False
+            else:
+                self.video_display_component.load_selections_from_config()
         else:
             self.video_display_component.set_selection_rects(selections)
         raw_plan = self.task_list_component.get_task_option(index, TaskOptions.MASK_PLAN, None)
@@ -964,6 +1097,7 @@ class HomeInterface(QWidget):
         try:
             # 通知 worker 线程停止
             self._stop_event.set()
+            self._cancel_ocr_detection()
             # 终止子进程
             ProcessManager.instance().terminate_all()
             # 等待 worker 线程结束（最多5秒）
@@ -987,3 +1121,22 @@ class HomeInterface(QWidget):
         except Exception as e:
             print(f"Error during close window:", e)
         super().closeEvent(event)
+
+    def _cancel_ocr_detection(self):
+        """在关闭窗口时终止尚未完成的 OCR 子进程并释放 IPC 资源。"""
+        self._ocr_result_timer.stop()
+        process = self._ocr_process
+        process_id = self._ocr_process_id
+        result_queue = self._ocr_result_queue
+        self._ocr_process = None
+        self._ocr_process_id = None
+        self._ocr_result_queue = None
+        self._ocr_task_index = -1
+        self._ocr_exit_poll_count = 0
+        if process is not None and process.is_alive():
+            ProcessManager.instance().terminate_by_process(process)
+        if process_id is not None:
+            ProcessManager.instance().remove_process(process_id)
+        if result_queue is not None:
+            result_queue.close()
+            result_queue.join_thread()
