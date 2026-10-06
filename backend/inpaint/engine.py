@@ -206,8 +206,8 @@ def resolve_device(preference: str = "auto") -> str:
     """校验单个 Torch 设备并返回其规范名称。
 
     自动模式的完整回退由 ``create_inpaint_engine`` / Real-ESRGAN 在模型加载
-    阶段执行；这里返回自动模式的首个候选 CPU，避免在尚未测试模型前武断地
-    宣称 CUDA 可用。
+    阶段执行；这里仅校验传入的单个候选设备。自动模式传入时会取候选链中的
+    首项 CUDA，并在上层初始化失败后继续尝试 CPU。
     """
     normalized = device_candidates(preference)[0]
     if normalized == "cpu":
@@ -234,6 +234,7 @@ def _pad_to_modulo(image: np.ndarray, modulo: int, *, constant: bool = False) ->
 
 
 class OpenCVEngine:
+    """传统 Telea 修复适配器，保持与 AI 引擎相同的 inpaint 接口。"""
     def __init__(self) -> None:
         self._engine = OpenCVInpaint()
 
@@ -258,6 +259,7 @@ class TorchScriptLaMaEngine:
             raise InpaintError(f"无法加载 {asset.filename}：{exc}") from exc
 
     def inpaint(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """执行 TorchScript 修复，并强制恢复 mask 外的原始像素。"""
         if image_bgr.ndim != 3 or image_bgr.shape[2] < 3:
             raise InpaintError("AI 修复只接受三通道彩色图像。")
         height, width = image_bgr.shape[:2]
@@ -301,6 +303,7 @@ class MangaEngine:
             raise InpaintError(f"无法加载 Manga 模型：{exc}") from exc
 
     def inpaint(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """以灰度与线稿先验执行漫画修复，再转换回统一的 BGR 输出。"""
         height, width = image_bgr.shape[:2]
         gray = cv2.cvtColor(image_bgr[:, :, :3], cv2.COLOR_BGR2GRAY)
         binary_mask = (mask > 0).astype(np.float32)
@@ -339,7 +342,11 @@ def create_inpaint_engine(
     device: str = "auto",
     model_dir: str | Path | None = None,
 ) -> InpaintEngine:
-    """按模式创建惰性修复引擎；调用方不需要了解模型细节。"""
+    """按模式创建惰性修复引擎；调用方不需要了解模型细节。
+
+    自动设备模式会真实初始化 CUDA，再在失败后初始化 CPU；不能只依赖
+    ``torch.cuda.is_available()``，因为模型加载、驱动或显存仍可能失败。
+    """
     try:
         selected = mode if isinstance(mode, InpaintMode) else InpaintMode(mode)
     except ValueError as exc:

@@ -26,8 +26,13 @@ from ui.component.media_preview_component import MediaPreviewComponent
 
 
 class ImageFormatInterface(QtWidgets.QWidget):
-    """常见位图格式转换；ICO 输出可包含多个标准尺寸。"""
+    """常见位图格式转换与多尺寸 ICO 制作页面。
 
+    Pillow 的文件读写放在后台线程中，避免大图编码阻塞 Qt 事件循环；完成
+    信号只携带元数据，由主线程负责更新预览、日志和 InfoBar。
+    """
+
+    # result 为输出路径与图像属性字典；error 为转换异常。二者互斥。
     conversion_finished = QtCore.Signal(object, object)
 
     _FORMAT_SUFFIXES = {
@@ -193,6 +198,7 @@ class ImageFormatInterface(QtWidgets.QWidget):
         return card._conversion_control_layout
 
     def _on_format_changed(self, output_format: str):
+        """根据目标格式切换质量控制与 ICO 多尺寸选项。"""
         is_ico = output_format == "ICO"
         supports_quality = output_format in {"JPEG", "WEBP"}
         self.ico_size_card.setVisible(is_ico)
@@ -205,6 +211,7 @@ class ImageFormatInterface(QtWidgets.QWidget):
             self.info_label.setText(f"输出为 {output_format} 图片。转换结果会另存，不覆盖源文件。")
 
     def open_source(self):
+        """选择源图片并只预览源文件，避免格式转换被误认为视觉处理。"""
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "打开图片",
@@ -229,6 +236,7 @@ class ImageFormatInterface(QtWidgets.QWidget):
         )
 
     def convert_and_save(self):
+        """请求目标路径后在后台线程执行编码，源文件始终保持不变。"""
         if self._working:
             return
         if self._source_path is None:
@@ -275,6 +283,11 @@ class ImageFormatInterface(QtWidgets.QWidget):
 
     @staticmethod
     def _convert_file(source: Path, target: Path, output_format: str, quality: int, ico_sizes: list[int]):
+        """执行一次纯文件转换。
+
+        JPEG/BMP 以白色背景扁平化 alpha；ICO 则保持透明并把所有选中尺寸
+        写入同一个文件。该方法不得访问 Qt 控件，因此可安全在线程中调用。
+        """
         with Image.open(source) as opened:
             image = opened.copy()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -345,6 +358,7 @@ class ImageFormatInterface(QtWidgets.QWidget):
 
     @QtCore.Slot(object, object)
     def _on_conversion_finished(self, result, error):
+        """消费后台结果并把可核对的输出属性写入日志。"""
         self._set_working(False)
         if error is not None:
             self._append_log(f"转换失败：{error}")

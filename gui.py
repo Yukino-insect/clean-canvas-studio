@@ -2,28 +2,19 @@
 # Portions derived from YaoFANGUK/video-subtitle-remover (Apache-2.0).
 # Modified by CleanCanvas Studio contributors; see LICENSE, NOTICE and MODIFICATIONS.md.
 import sys
-import os
-import configparser
-import cv2
 import multiprocessing
 from contextlib import redirect_stdout
 from io import StringIO
-from PySide6.QtCore import Qt, QTranslator
+from PySide6.QtCore import Qt
 from PySide6 import QtCore, QtWidgets, QtGui
-from PySide6.QtWidgets import QApplication, QFrame, QStackedWidget, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QApplication
 # qfluentwidgets 1.7.7 currently prints a commercial-product promotion while
 # importing its config module. Suppress only that third-party import-time output;
 # project logs and runtime errors keep their normal stdout behavior.
 with redirect_stdout(StringIO()):
-    from qfluentwidgets import (FluentWindow, PushButton, Slider, ProgressBar, PlainTextEdit,
-                              setTheme, Theme, FluentIcon, CardWidget, SettingCardGroup,
-                              ComboBoxSettingCard, SwitchSettingCard, setThemeColor, OptionsConfigItem,
-                              OptionsValidator, SubtitleLabel, HollowHandleStyle, qconfig, ConfigItem, QConfig,
-                              NavigationWidget, NavigationItemPosition, isDarkTheme, InfoBar)
+    from qfluentwidgets import (FluentWindow, FluentIcon,NavigationItemPosition, InfoBar)
 
-from qframelesswindow.utils import getSystemAccentColor
 from backend.config import config, tr
-from backend.tools.theme_listener import SystemThemeListener
 from backend.tools.process_manager import ProcessManager
 from ui.advanced_setting_interface import AdvancedSettingInterface
 from ui.enhance_interface import EnhanceInterface
@@ -36,6 +27,12 @@ PROJECT_ICON_PATH = "design/vsr.ico"
 
 
 class SubtitleExtractorGUI(FluentWindow):
+    """应用外壳：负责页面注册、窗口状态和进程级资源清理。
+
+    各业务页面自行维护任务与预览状态；此类只负责把它们放入 Fluent
+    导航框架，避免把页面业务逻辑混入窗口生命周期代码。
+    """
+
     def __init__(self):
         super().__init__()
         # 内容修复是以视频预览为核心的桌面工作台。低于该尺寸时，右侧设置、
@@ -86,7 +83,8 @@ class SubtitleExtractorGUI(FluentWindow):
         )
 
     def _create_layout(self):
-        # 创建主页面和高级设置页面
+        # 页面实例在此统一持有。导航路由由 addSubInterface 自动建立，页面间
+        # 不通过切换 stack index 来交换业务状态。
         self.homeInterface = HomeInterface(self)
         self.homeInterface.setObjectName("HomeInterface")
         self.advancedSettingInterface = AdvancedSettingInterface(self)
@@ -117,7 +115,7 @@ class SubtitleExtractorGUI(FluentWindow):
             self.stackWidget.setCurrentIndex(1)
 
     def closeEvent(self, event):
-        """程序关闭时保存窗口位置并清理资源"""
+        """保存窗口几何，并终止仍由应用登记的子进程后退出。"""
         self.save_window_position()
         # 界面退出时，清理子进程
         ProcessManager.instance().terminate_all()

@@ -12,9 +12,10 @@ import subprocess
 import concurrent.futures
 
 class ProcessManager:
-    """
-    进程管理器类，用于管理子进程的生命周期
-    使用弱引用避免内存泄漏
+    """登记并终止应用启动的子进程。
+
+    内容修复使用独立进程隔离模型运行时；窗口关闭或用户停止任务时，统一
+    从这里处理 multiprocessing.Process 与 subprocess.Popen 的终止差异。
     """
     _instance = None
 
@@ -69,7 +70,7 @@ class ProcessManager:
         return False
 
     def terminate_all(self):
-        """并发终止所有管理的进程"""
+        """并发终止所有登记进程，避免退出窗口后遗留模型或 FFmpeg 进程。"""
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for process_id, process in list(self.processes.items()):
@@ -85,6 +86,7 @@ class ProcessManager:
         self.processes.clear()
 
     def terminate_by_process(self, process):
+        """先尝试温和终止，再在必要时按 PID 强制清理进程树。"""
         if process is None:
             return
         try:
@@ -121,6 +123,7 @@ class ProcessManager:
         self.terminate_by_pid(process.pid)
 
     def terminate_by_pid(self, pid):
+        """按平台调用系统命令终止 PID 及其子进程。"""
         try:
             # 使用系统命令强制终止进程
             if platform.system() == 'Windows':

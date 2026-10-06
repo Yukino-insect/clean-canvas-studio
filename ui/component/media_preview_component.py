@@ -67,6 +67,7 @@ class MediaPreviewComponent(CardWidget):
         self.set_placeholder(placeholder)
 
     def set_placeholder(self, text: str | None = None):
+        """清空媒体像素与视频控件；空状态可选择不显示任何提示文字。"""
         self._source_pixmap = None
         self._placeholder = self._placeholder if text is None else text
         self.display.setPixmap(QtGui.QPixmap())
@@ -77,6 +78,7 @@ class MediaPreviewComponent(CardWidget):
         self.set_video_controls_visible(False)
 
     def set_video_controls_visible(self, visible: bool, frame_count: int = 0, frame_no: int = 0):
+        """显示视频滑块，并安全约束当前帧到有效范围。"""
         self.video_slider.blockSignals(True)
         self.video_slider.setMaximum(max(0, int(frame_count) - 1))
         self.video_slider.setValue(max(0, min(int(frame_no), self.video_slider.maximum())))
@@ -84,6 +86,7 @@ class MediaPreviewComponent(CardWidget):
         self.video_slider.setVisible(visible)
 
     def set_frame(self, frame_bgr: np.ndarray, title: str):
+        """将 BGR 帧转换为 QPixmap，并根据原始宽高比更新显示容器。"""
         if frame_bgr is None:
             self.set_placeholder("无法读取预览媒体")
             return
@@ -101,7 +104,11 @@ class MediaPreviewComponent(CardWidget):
         self._refresh_pixmap()
 
     def set_comparison(self, original_bgr: np.ndarray, enhanced_bgr: np.ndarray, title: str):
-        """将输入缩放到输出尺寸后并排显示，避免不同倍率无法拼接。"""
+        """将输入缩放到输出尺寸后并排显示，避免不同倍率无法拼接。
+
+        分隔线使用所有处理页面共享的中性颜色；它仅用于视觉分区，不代表
+        图像内容发生了额外处理。
+        """
         if original_bgr is None or enhanced_bgr is None:
             self.set_placeholder("当前任务未提供可用对比预览")
             return

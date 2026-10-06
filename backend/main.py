@@ -42,7 +42,11 @@ ProgressListener: TypeAlias = Callable[[int, bool], None]
 
 
 class SubtitleRemover:
-    """检测硬字幕/文本水印，并以 OpenCV 对相应区域逐帧修复。"""
+    """内容修复主编排器。
+
+    负责统一图片与视频的输入、最终掩膜、修复引擎、进度通知和输出封装；
+    不在此类中决定 GUI 交互，GUI 只通过选项和回调与它交换数据。
+    """
 
     def __init__(self, vd_path: str, gui_mode: bool = False) -> None:
         self.lock = threading.RLock()
@@ -89,6 +93,7 @@ class SubtitleRemover:
             os.makedirs(pic_dir, exist_ok=True)
             self.video_out_path = os.path.join(pic_dir, f"{self.vd_name}{self.ext}")
 
+        # 这两个值既供命令行进度条使用，也会通过进度监听器同步给 GUI。
         self.progress_total = 0
         self.progress_remover = 0
         self.isFinished = False
@@ -102,11 +107,14 @@ class SubtitleRemover:
         self.inpaint_mode = InpaintMode.OPENCV.value
         self.ai_device = "auto"
         self.model_dir: str | None = None
+        # 修复模型采用惰性加载：OpenCV 无需模型，AI 权重仅在确实需要修复
+        # 第一帧/图片时才初始化，避免用户打开媒体即占用显存或触发下载。
         self._inpaint_engine = None
         self.mask_plan: dict | None = None
         self.video_mask_strategy = VideoMaskStrategy.STATIC.value
 
     def update_progress(self, tbar: tqdm, increment: int) -> None:
+        """推进统一百分比并通知所有前端监听器。"""
         tbar.update(increment)
         current_percentage = (tbar.n / tbar.total) * 100 if tbar.total else 100
         self.progress_remover = int(current_percentage)
@@ -145,6 +153,7 @@ class SubtitleRemover:
         ]
 
     def _engine(self):
+        """按当前模式创建并缓存修复引擎，整个任务复用同一模型实例。"""
         if self._inpaint_engine is None:
             try:
                 self._inpaint_engine = create_inpaint_engine(
@@ -159,6 +168,7 @@ class SubtitleRemover:
         return self._inpaint_engine
 
     def _plan(self) -> MaskPlan | None:
+        """将跨进程传递的字典恢复为不可依赖 GUI 对象的掩膜计划。"""
         return MaskPlan.from_dict(self.mask_plan) if self.mask_plan else None
 
     def _mask(
@@ -167,6 +177,7 @@ class SubtitleRemover:
         regions: list[tuple[int, int, int, int]] | None = None,
         polygons: list[OcrPolygon] | None = None,
     ) -> np.ndarray:
+        # 已确认的 MaskPlan 优先级最高；仅当不存在计划时才回退到旧式矩形区域。
         plan = self._plan()
         if plan:
             if polygons is not None:
@@ -184,6 +195,7 @@ class SubtitleRemover:
         regions: list[tuple[int, int, int, int]] | None = None,
         polygons: list[OcrPolygon] | None = None,
     ) -> np.ndarray:
+        """为单帧构造 mask、执行修复，并向 GUI 发送可视化对比。"""
         mask = self._mask(frame, regions, polygons)
         if not np.any(mask):
             return frame
@@ -195,12 +207,13 @@ class SubtitleRemover:
         return repaired
 
     def remove_video_subtitles(self, tbar: tqdm) -> None:
-        """检测字幕帧，并仅对包含文字的帧执行 OpenCV 修复。"""
+        """按视频策略生成每帧掩膜，并使用当前选择的修复引擎写出结果。"""
         subtitle_frames: dict[int, list[tuple[int, int, int, int]]] = {}
         polygon_frames: dict[int, list[OcrPolygon]] = {}
         sub_detector = None
         plan = self._plan()
         strategy = VideoMaskStrategy(self.video_mask_strategy)
+        # 静态计划直接复用用户确认的 mask；采样/逐帧策略重新收集 OCR 多边形。
         static_plan = plan is not None and strategy is VideoMaskStrategy.STATIC
         if static_plan:
             self.append_output(f"使用已确认的精确掩膜计划：{plan.mode.value}（静态复用）。")
@@ -240,6 +253,8 @@ class SubtitleRemover:
                 raw_regions = subtitle_frames.get(frame_no, [])
                 polygons = polygon_frames.get(frame_no)
                 regions = raw_regions if self.manual_regions else self._valid_regions(raw_regions)
+                # 分支顺序体现掩膜来源优先级：静态确认计划、动态 OCR 多边形、
+                # 手工/旧式矩形区域，最后是不做修复的原帧。
                 if static_plan and is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections):
                     repaired = self._repair(frame)
                 elif polygons or (plan is not None and plan.mode is MaskMode.MIXED and is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections)):
@@ -257,6 +272,7 @@ class SubtitleRemover:
             gc.collect()
 
     def remove_image_subtitles(self) -> None:
+        """处理单张图片；复用与视频相同的最终 mask 和修复引擎。"""
         original_frame = read_image(self.video_path)
         if original_frame is None:
             raise RuntimeError(tr["Main"]["ReadImageFailed"].format(self.video_path))
@@ -290,7 +306,11 @@ class SubtitleRemover:
         gc.collect()
 
     def merge_audio_to_video(self) -> None:
-        """把输入视频的原始音频无损回封装到处理结果。"""
+        """把输入视频的原始音频无损回封装到处理结果。
+
+        音频流不兼容或源视频无音频时，保留已成功编码的无音频画面文件，
+        使视频修复结果仍可交付。
+        """
         temp_audio = tempfile.NamedTemporaryFile(suffix=".aac", delete=False)
         use_shell = os.name == "nt"
         try:
@@ -364,6 +384,7 @@ class SubtitleRemover:
                 pass
 
     def run(self) -> None:
+        """执行完整任务，并确保视频句柄、写入器和临时文件最终得到清理。"""
         start_time = time.time()
         if not self.mask_plan and not self.manual_regions and not self.use_ocr_detection:
             raise RuntimeError("没有可修复区域。请先确认 OCR 结果或手动画框后确认。")

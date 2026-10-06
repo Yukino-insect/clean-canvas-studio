@@ -30,7 +30,11 @@ class EnhanceCancelled(InpaintError):
 
 
 class MediaEnhancer:
-    """不覆盖源文件的超分任务；视频输出保留原音频（若存在）。"""
+    """不覆盖源文件的超分任务；视频输出保留原音频（若存在）。
+
+    该类只处理媒体读写和增强任务生命周期，具体神经网络由
+    ``RealESRGANEnhancer`` 按模式和设备创建。
+    """
 
     def __init__(
         self,
@@ -53,6 +57,7 @@ class MediaEnhancer:
         self.progress_listeners: list[ProgressCallback] = []
         self.log_listeners: list[LogCallback] = []
         self.preview_listeners: list[PreviewCallback] = []
+        # 视频预览不必逐帧跨线程传输；该间隔降低大分辨率帧复制与 Qt 队列压力。
         self.preview_interval_frames = max(1, int(preview_interval_frames))
         self.stop_event = threading.Event()
         self.is_finished = False
@@ -132,6 +137,7 @@ class MediaEnhancer:
         self._notify_preview(image, result)
 
     def _merge_audio(self, temp_video: str) -> None:
+        """尝试流复制输入音频；失败时保留仅含画面的临时视频。"""
         command = [
             FFmpegCLI.instance().ffmpeg_path, "-y", "-i", temp_video, "-i", self.media_path,
             "-map", "0:v:0", "-map", "1:a?", "-c", "copy", "-shortest", "-loglevel", "error", self.output_path,
@@ -143,6 +149,7 @@ class MediaEnhancer:
             shutil.copy2(temp_video, self.output_path)
 
     def _run_video(self, enhancer) -> None:
+        """逐帧增强视频并以固定偶数分辨率编码，便于 yuv420p 输出。"""
         capture = cv2.VideoCapture(get_readable_path(self.media_path))
         if not capture.isOpened():
             raise InpaintError(f"无法读取视频：{self.media_path}")
@@ -188,6 +195,7 @@ class MediaEnhancer:
             Path(temp.name).unlink(missing_ok=True)
 
     def run(self) -> str:
+        """加载模型并分派图片或视频流程，成功时返回最终输出路径。"""
         self._check_cancelled()
         self.append_log(f"加载增强模型：{self.mode}，设备请求：{self.device}。")
         enhancer = self._enhancer()

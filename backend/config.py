@@ -27,6 +27,11 @@ PROJECT_UPDATE_URLS = [
 ]
 
 class Config(QConfig):
+    """应用持久化配置。
+
+    页面级选项通过 qfluentwidgets 的 ConfigItem 自动保存；任务开始时会把
+    与媒体处理相关的配置复制到任务对象，避免运行中修改设置影响队列快照。
+    """
     # 界面语言设置
     intefaceTexts = {
         '简体中文': 'ch',

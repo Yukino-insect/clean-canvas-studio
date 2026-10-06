@@ -46,6 +46,7 @@ class AdvancedSettingInterface(ScrollArea):
         self.setup_layout()
 
     def setup_layout(self):
+        """按使用顺序放置帮助、OCR、掩膜、视频、通用与模型管理分组。"""
         self.help_group.addSettingCard(self.project_help)
         self.expandLayout.addWidget(self.help_group)
 
@@ -369,6 +370,7 @@ class AdvancedSettingInterface(ScrollArea):
         .then(lambda success: self.on_version_info_fetched(success, ignore)))
 
     def on_version_info_fetched(self, success, ignore=False):
+        """将后台更新检查结果转换为主线程中的用户提示。"""
         if success:
             self.show_message_box(
                 tr["Setting"]["UpdatesAvailableTitle"],

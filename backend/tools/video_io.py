@@ -23,6 +23,7 @@ class FramePrefetcher:
         self._thread.start()
 
     def _read_loop(self):
+        """预读取直到 EOF；有界队列会在消费者较慢时提供自然背压。"""
         while not self._stopped:
             ret, frame = self.cap.read()
             self._buffer.put((ret, frame))
@@ -34,6 +35,7 @@ class FramePrefetcher:
         return self._buffer.get()
 
     def get(self, propId):
+        """透传底层 VideoCapture 属性查询，保持调用接口兼容。"""
         return self.cap.get(propId)
 
     def stop(self):
@@ -47,6 +49,7 @@ class FramePrefetcher:
         self._thread.join(timeout=5)
 
     def release(self):
+        """停止预取线程并关闭底层 VideoCapture。"""
         self.stop()
         self.cap.release()
 
@@ -58,6 +61,7 @@ class FFmpegVideoWriter:
     """
 
     def __init__(self, output_path, fps, size):
+        """创建接收 BGR 原始帧的 FFmpeg stdin 管道。"""
         w, h = size
         cmd = [
             FFmpegCLI.instance().ffmpeg_path,
@@ -92,7 +96,7 @@ class FFmpegVideoWriter:
             pass
 
     def release(self):
-        """关闭管道并等待编码完成。"""
+        """关闭 stdin 并等待编码完成；超时后终止编码器以避免悬挂。"""
         try:
             self._process.stdin.close()
         except BrokenPipeError:

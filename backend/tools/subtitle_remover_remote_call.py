@@ -3,6 +3,7 @@ import threading
 from enum import Enum
 
 class Command(Enum):
+    """子进程向 GUI 进程发送的有序消息类型。"""
     FINISH = 0,
     PROGRESS = 1,
     LOG = 2,
@@ -11,8 +12,10 @@ class Command(Enum):
     UPDATE_PREVIEW_WITH_COMP = 5,
 
 class SubtitleRemoverRemoteCall:
-    """
-    远程回调函数类，用于在多进程环境中传递回调函数
+    """将子进程回调转发到 GUI 进程的队列桥。
+
+    ``multiprocessing.Process`` 不能直接调用 Qt 槽函数，因此子进程只写入
+    ``queue``；守护线程在主进程取出消息后再执行对应 callback。
     """
     def __init__(self):
         self.queue = multiprocessing.Queue()
@@ -21,6 +24,7 @@ class SubtitleRemoverRemoteCall:
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
+        """持续分发队列消息；收到 FINISH 后停止消费并释放线程状态。"""
         try:
             while self.running:
                 cmd, args = self.queue.get(block=True)
@@ -33,6 +37,7 @@ class SubtitleRemoverRemoteCall:
             self.running = False
 
     def stop(self):
+        """请求本地消费线程停止；不主动终止发送消息的子进程。"""
         self.running = False
 
     def register_update_progress_callback(self, callback):

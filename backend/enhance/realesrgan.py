@@ -148,6 +148,12 @@ def _build_srvgg_net():
 
 
 class RealESRGANEnhancer:
+    """Real-ESRGAN 推理器。
+
+    网络固定产生原生 4×结果；调用方可请求 1×至4×，非 4×倍率会在推理后
+    通过高质量缩放得到目标尺寸。大图按 tile 分块以限制显存峰值。
+    """
+
     native_scale = 4
 
     def __init__(
@@ -195,6 +201,7 @@ class RealESRGANEnhancer:
             ) from errors[-1][1]
 
     def _load_model(self, model, path: Path, device: str):
+        """在 CPU 加载权重后再迁移设备，避免 checkpoint 绑定原始设备。"""
         checkpoint = self.torch.load(str(path), map_location="cpu", weights_only=True)
         state = checkpoint.get("params_ema", checkpoint.get("params", checkpoint))
         model.load_state_dict(state, strict=True)
@@ -218,6 +225,7 @@ class RealESRGANEnhancer:
             return self.model(tensor)
 
     def _infer_tiled(self, image: np.ndarray):
+        """对大图执行带重叠边缘的 4×分块推理，减少单次显存占用。"""
         torch = self.torch
         height, width = image.shape[:2]
         if not self.tile_size or max(height, width) <= self.tile_size:
@@ -239,7 +247,11 @@ class RealESRGANEnhancer:
         return output
 
     def enhance(self, image_bgr: np.ndarray, scale: float = 2.0) -> np.ndarray:
-        """输入/输出为 BGR uint8；模型原生 4×，其他倍率以 Lanczos 缩放。"""
+        """输入/输出为 BGR uint8；模型原生 4×，其他倍率以 Lanczos 缩放。
+
+        所有张量后处理保持在 ``inference_mode`` 内，避免对 inference tensor
+        进行非法原地修改；这对视频逐帧处理尤为重要。
+        """
         if not 1.0 <= float(scale) <= 4.0:
             raise InpaintError("增强倍率必须在 1× 到 4×之间。")
         if image_bgr.ndim != 3 or image_bgr.shape[2] < 3:

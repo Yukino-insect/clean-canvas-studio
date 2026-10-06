@@ -18,7 +18,11 @@ from ui.component.media_preview_component import MediaPreviewComponent
 
 
 class EnhanceSettingInterface(QtWidgets.QVBoxLayout):
-    """使用与内容修复页一致的 SettingCard 呈现增强参数。"""
+    """使用与内容修复页一致的 SettingCard 呈现增强参数。
+
+    这些选项在添加任务时被复制到任务对象；队列执行期间修改页面设置不会
+    影响已入队任务，只有“重置为待处理”后才会重新读取当前设置。
+    """
 
     def __init__(self, parent):
         super().__init__()
@@ -83,14 +87,21 @@ class EnhanceSettingInterface(QtWidgets.QVBoxLayout):
         resize_to_current_text()
 
     def current_options(self):
+        """返回可序列化的任务级模型、倍率与设备快照。"""
         return config.enhanceMode.value, float(config.enhanceScale.value), config.aiDevice.value
 
     def set_media_type(self, media_type: str):
+        """仅在视频任务模式下展示会实际生效的视频提示。"""
         self.video_note.setVisible(media_type == "video")
 
 
 class EnhanceInterface(QtWidgets.QWidget):
-    """多媒体增强队列：左侧预览/日志，右侧设置/任务/操作。"""
+    """多媒体增强队列：左侧预览/日志，右侧设置/任务/操作。
+
+    后台线程只运行增强器；所有 Qt 控件更新都通过信号回到 GUI 线程完成。
+    ``_preview_capture`` 保存输出媒体，``_preview_source_capture`` 只在任务
+    完成后用于输入/输出逐帧对比，二者需要在切换任务时一起释放。
+    """
 
     progress_signal = QtCore.Signal(int, int, bool)
     log_signal = QtCore.Signal(str)
@@ -257,6 +268,7 @@ class EnhanceInterface(QtWidgets.QWidget):
         self.append_log("已切换为图片任务模式。" if media_type == "image" else "已切换为视频任务模式；添加文件后可使用帧滑块预览。")
 
     def _on_task_selected(self, index: int, _path: str):
+        """加载选中任务的预览；已完成媒体优先进入输入/输出对比模式。"""
         task = self.task_list.get_task(index)
         if task is None:
             return
@@ -306,6 +318,7 @@ class EnhanceInterface(QtWidgets.QWidget):
         self.append_log(f"已重置任务：{task.name}，将使用当前设置（{task.mode}，{task.scale:g}×，{task.device}）。")
 
     def _on_preview_frame_requested(self, frame_no: int):
+        """按滑块位置读取同一帧的输入与输出视频，并保持两侧对比同步。"""
         capture = self._preview_capture
         if capture is None or not capture.isOpened():
             return
@@ -323,6 +336,7 @@ class EnhanceInterface(QtWidgets.QWidget):
             self.preview_component.set_frame(frame, "")
 
     def _release_preview_capture(self):
+        """释放当前任务的输出/输入 VideoCapture，避免 Windows 独占文件句柄。"""
         if self._preview_capture is not None:
             self._preview_capture.release()
         if self._preview_source_capture is not None:
@@ -333,6 +347,11 @@ class EnhanceInterface(QtWidgets.QWidget):
         self._preview_is_comparison = False
 
     def start_queue(self):
+        """启动本轮队列。
+
+        开始时固定待处理任务索引，不能在工作线程里反复查询 GUI 状态；否则
+        迅速完成的任务可能在 queued 状态信号尚未落地时被重复执行。
+        """
         if self._queue_thread and self._queue_thread.is_alive():
             return
         pending_task_indices = [index for index, _task in self.task_list.get_pending_tasks()]
@@ -413,6 +432,7 @@ class EnhanceInterface(QtWidgets.QWidget):
 
     @QtCore.Slot(int, str)
     def _on_complete(self, index: int, output_path: str):
+        """在 GUI 线程记录输出，并切换到完成后的前后对比预览。"""
         task = self.task_list.get_task(index)
         if task is None:
             return
