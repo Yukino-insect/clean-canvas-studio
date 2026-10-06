@@ -96,20 +96,36 @@ AI 修复根据周围上下文生成补全内容，不保证还原被遮挡区�
 
 ## 安装与模型下载
 
-### 基础依赖
+### Windows（CPython 3.12）依赖安装
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+
+# CPU 版：可使用 OpenCV 和全部 AI 修复/增强模式，但模型在 CPU 上推理。
+.\scripts\install-runtime.ps1 -TorchBackend cpu -Python .\.venv\Scripts\python.exe
 ```
 
-项目需要 PaddlePaddle/PaddleOCR 用于文字检测。若它在你的平台上无法由 `requirements.txt` 正常安装，请先按 [PaddlePaddle 官方说明](https://www.paddlepaddle.org.cn/install/quick) 安装与系统相符的版本。
+上述脚本会使用 `requirements/base.lock` 和 `requirements/torch-cpu.lock`，并启用哈希校验。锁文件当前针对 **Windows x86_64 + CPython 3.12** 生成；其他平台应重新解析对应的锁文件，不能拿 Windows 的二进制锁直接套用。
+
+项目需要 PaddlePaddle/PaddleOCR 用于文字检测。若它在你的平台上无法由锁文件正常安装，请先按 [PaddlePaddle 官方说明](https://www.paddlepaddle.org.cn/install/quick) 安装与系统相符的版本，再重新生成对应平台的锁文件。
 
 ### PyTorch 与 CUDA
 
-OpenCV 模式不依赖 GPU。LaMa、Anime-LaMa、Manga 和 Real-ESRGAN 需要 PyTorch；请从 [PyTorch 官方安装页](https://pytorch.org/get-started/locally/) 选择与操作系统、NVIDIA 驱动和 CUDA 环境匹配的安装命令。CPU 环境可使用官方 CPU wheel，CUDA 环境应使用对应 CUDA wheel。
+OpenCV 模式不依赖 PyTorch。LaMa、Anime-LaMa、Manga 和 Real-ESRGAN 则需要与设备匹配的 PyTorch profile。仓库提供已锁定的 CPU 与 CUDA 12.6 profile：
+
+```powershell
+# NVIDIA 驱动支持 CUDA 12.6 时使用；会安装锁定的 torch ... +cu126 wheel。
+.\scripts\install-runtime.ps1 -TorchBackend cu126 -Python .\.venv\Scripts\python.exe
+
+# 必须验证实际的 PyTorch CUDA 能力，而不是只确认机器装有 NVIDIA 显卡。
+.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
+```
+
+只有最后一项输出 `True` 时，应用中的 `CUDA` 选项才可用；否则请选择 `CPU` 或 `自动`。`自动` 会尝试 CUDA 后回退 CPU，显式选择 `CUDA` 则会在环境不满足时给出错误。若驱动不支持 CUDA 12.6，或使用其他系统/架构，请按 [PyTorch 官方安装页](https://pytorch.org/get-started/locally/) 选择匹配的 wheel，并新建/更新对应 profile，而不是修改现有 `cu126` 锁文件。
+
+`pip install -r requirements.txt` 只安装无 PyTorch 的基础依赖，适合 OpenCV 模式或需要自行管理 Torch 的场景；完整的 CPU/CUDA 安装请使用上面的脚本。
 
 模型不会在启动 GUI 时下载。首次运行某个 AI 模式时，程序会优先使用已校验的模型缓存或兼容的内置权重；只有缺失时才下载到模型缓存目录，并在加载前校验 MD5。缓存目录可在“高级设置 → AI 模型与缓存”中改到有足够空间的磁盘。下载失败后重新运行即可安全重试；不完整文件不会被当作模型使用。
 

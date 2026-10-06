@@ -1,0 +1,4 @@
+# NVIDIA CUDA 12.6 profile for Windows CPython 3.12.
+# The exact wheel and hashes live in torch-cu126.lock. Do not use this profile
+# for a CPU-only installation or a driver that cannot run CUDA 12.6.
+torch>=2.2

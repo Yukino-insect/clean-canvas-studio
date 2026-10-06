@@ -1,2 +1,2 @@
-# Development and regression-test tooling. Runtime dependencies remain in requirements.txt.
+# Development and regression-test tooling. Runtime source and locked profiles live in requirements/.
 pytest>=8.0

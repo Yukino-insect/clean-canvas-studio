@@ -1,0 +1,3 @@
+# PyTorch CPU profile for Windows CPython 3.12.
+# The exact wheel and hashes live in torch-cpu.lock.
+torch>=2.2
