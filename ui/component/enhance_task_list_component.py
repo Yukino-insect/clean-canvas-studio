@@ -31,6 +31,10 @@ class EnhanceTask:
     mode: str
     scale: float
     device: str
+    model_dir: str | None = None
+    # 进入处理中时固定的模型/倍率/设备快照，避免 GUI 状态信号尚未消费时被
+    # 后续配置修改影响。
+    execution_options: tuple[str, float, str, str | None] | None = None
     progress: int = 0
     status: EnhanceTaskStatus = EnhanceTaskStatus.PENDING
     output_path: str | None = None
@@ -74,11 +78,18 @@ class EnhanceTaskListComponent(QWidget):
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.table)
 
-    def add_task(self, path: str, mode: str, scale: float, device: str):
+    def add_task(self, path: str, mode: str, scale: float, device: str, model_dir: str | None = None):
         existing = self.find_task_index_by_path(path)
         if existing >= 0:
             self.delete_task(existing)
-        task = EnhanceTask(path=path, name=os.path.basename(path), mode=mode, scale=scale, device=device)
+        task = EnhanceTask(
+            path=path,
+            name=os.path.basename(path),
+            mode=mode,
+            scale=scale,
+            device=device,
+            model_dir=model_dir,
+        )
         self.tasks.append(task)
         row = len(self.tasks) - 1
         self.table.insertRow(row)
@@ -140,6 +151,7 @@ class EnhanceTaskListComponent(QWidget):
         if task is None:
             return
         task.output_path = None
+        task.execution_options = None
         self.update_task_progress(index, 0)
         self.update_task_status(index, EnhanceTaskStatus.PENDING)
         self.task_reset.emit(index)

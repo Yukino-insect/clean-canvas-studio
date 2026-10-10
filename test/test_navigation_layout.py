@@ -64,6 +64,10 @@ class NavigationLayoutTests(unittest.TestCase):
                 window.homeInterface.run_button,
             )
             for button in action_buttons:
+                # 按掩膜来源隐藏的工具不参与当前布局；可见按钮才需要保证文字
+                # 与图标的实际可读宽度。
+                if not button.isVisible():
+                    continue
                 # 图标、左右边距和焦点边框预留 35px；自然宽度按钮文字不能被裁切。
                 minimum_readable_width = button.fontMetrics().horizontalAdvance(button.text()) + 35
                 self.assertGreaterEqual(button.width(), minimum_readable_width, button.text())
@@ -108,6 +112,45 @@ class NavigationLayoutTests(unittest.TestCase):
                 natural = max(card.comboBox.minimumSizeHint().width(), card.comboBox.sizeHint().width())
                 expected = min(card.comboBox.maximumWidth(), natural)
                 self.assertEqual(card.comboBox.width(), expected)
+        finally:
+            window.close()
+
+    def test_all_workbenches_share_preview_and_log_vertical_allocation(self):
+        """内容修复、增强、转换不能因布局 stretch 漏配而出现不同预览高度。"""
+        window = SubtitleExtractorGUI()
+        try:
+            # 只有窗口高于 16:9 画布所需高度时，内容修复内部错误的 Center
+            # 对齐才会暴露；使用较高窗口以验证黑色画布而非外层占位的真实高度。
+            window.resize(1360, 960)
+            window.show()
+            self.app.processEvents()
+            pages = (
+                (window.homeInterface, window.homeInterface.output_text),
+                (window.enhanceInterface, window.enhanceInterface.output_text),
+                (window.imageFormatInterface, window.imageFormatInterface.log),
+            )
+            for page, log in pages:
+                layout = page.preview_log_layout
+                self.assertEqual(layout.stretch(0), 2)
+                self.assertEqual(layout.stretch(1), 1)
+                self.assertEqual(log.minimumHeight(), 150)
+
+            # 除纵向 stretch 外，无标题 MediaPreview 的内部边距也必须同内容
+            # 修复的预览画布一致；否则组件 size hint 不同，实际高度仍会偏移。
+            black_canvas_heights = []
+            for page, preview in (
+                (window.homeInterface, window.homeInterface.video_display_component),
+                (window.enhanceInterface, window.enhanceInterface.preview_component),
+                (window.imageFormatInterface, window.imageFormatInterface.preview),
+            ):
+                window.switchTo(page)
+                QTest.qWait(30)
+                self.app.processEvents()
+                black_canvas_heights.append(preview.black_container.height())
+            self.assertEqual(
+                black_canvas_heights,
+                [black_canvas_heights[0]] * len(black_canvas_heights),
+            )
         finally:
             window.close()
 

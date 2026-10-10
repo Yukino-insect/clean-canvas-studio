@@ -1,0 +1,2 @@
+# PaddleOCR 的 CPU 运行时 profile。GPU profile 与它不能共存于同一环境。
+paddlepaddle==3.0.0

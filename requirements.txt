@@ -1,11 +1,11 @@
 # Compatibility entry point for the platform-independent runtime dependencies.
 #
-# AI modes require a separately selected, locked PyTorch profile because a CPU
-# wheel and a CUDA wheel are different binary distributions. On Windows use:
-#   .\scripts\install-runtime.ps1 -TorchBackend cpu
+# AI modes require separately selected, locked PyTorch and PaddlePaddle profiles
+# because CPU and CUDA wheels are different binary distributions. On Windows use:
+#   .\scripts\install-runtime.ps1 -TorchBackend cpu -PaddleBackend cpu
 # or
-#   .\scripts\install-runtime.ps1 -TorchBackend cu126
+#   .\scripts\install-runtime.ps1 -TorchBackend cu126 -PaddleBackend cu118
 #
-# `pip install -r requirements.txt` intentionally installs only the base profile;
-# OpenCV mode works, while AI modes will report that PyTorch is missing.
+# `pip install -r requirements.txt` intentionally installs only the base profile.
+# OpenCV mode works, while AI modes and OCR need their selected runtime profile.
 -r requirements/base.lock

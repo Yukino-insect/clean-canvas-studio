@@ -233,6 +233,66 @@ def _pad_to_modulo(image: np.ndarray, modulo: int, *, constant: bool = False) ->
     return np.pad(image, padding, mode="constant" if constant else "symmetric")
 
 
+def _finish_ink_on_flat_background(
+    result_bgr: np.ndarray,
+    source_bgr: np.ndarray,
+    binary_mask: np.ndarray,
+) -> np.ndarray:
+    """清理 AI 在纯色底上遗留的文字/线条笔画。
+
+    LaMa 类模型擅长补全结构，但对“白色气泡 + 稀疏深色字形”这类任务，偶尔会在
+    mask 内重新生成浅灰笔画。这里不是对 AI 输出再次模糊，而是只在以下条件同时
+    成立时，以 *原图中 mask 外* 的局部底色覆盖该连通笔画：
+
+    * 掩膜内的原始像素明显比周围暗（说明更像文字或线条，而非一块宽泛涂鸦）；
+    * 周围采样环在 Lab 色彩空间中高度一致（说明该处确实是平坦底色）。
+
+    因此复杂纹理、渐变、彩色物体，以及把整块区域都涂掉的手工 mask 都会保留 AI
+    的原始结果。掩膜外像素绝不修改。
+    """
+    if not np.any(binary_mask):
+        return result_bgr
+
+    # Lab 距离比直接比较 BGR 更接近人眼对“同一底色”的判断；4px 的采样环足以
+    # 覆盖文字抗锯齿边缘，又不会过多跨到邻近的气泡边框或插画内容。
+    source_lab = cv2.cvtColor(source_bgr[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary_mask.astype(np.uint8), connectivity=8
+    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    repaired = result_bgr.copy()
+
+    for label in range(1, component_count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area == 0:
+            continue
+        component = labels == label
+        dilated = cv2.dilate(component.astype(np.uint8), kernel)
+        # 排除所有其它遮罩，避免把另一行文字当作当前文字的背景样本。
+        ring = (dilated > 0) & ~binary_mask.astype(bool)
+        if int(ring.sum()) < 24:
+            continue
+
+        ring_lab = source_lab[ring]
+        background_lab = np.median(ring_lab, axis=0)
+        distances = np.linalg.norm(ring_lab - background_lab, axis=1)
+        inliers = distances <= 16.0
+        # JPEG 压缩会让看似白色的气泡出现轻微色噪；允许少量边框/抗锯齿和
+        # 压缩噪声混入，但不把渐变、纹理误判为纯色底。
+        if float(inliers.mean()) < 0.80:
+            continue
+
+        component_lightness = source_lab[:, :, 0][component]
+        # 宽泛涂鸦通常会包含大量原本就接近背景的像素；此时交给 AI，不强行填平。
+        if float(np.percentile(component_lightness, 75)) > float(background_lab[0] - 22.0):
+            continue
+
+        background_bgr = np.median(source_bgr[:, :, :3][ring][inliers], axis=0)
+        repaired[component] = np.clip(background_bgr, 0, 255).astype(np.uint8)
+
+    return repaired
+
+
 class OpenCVEngine:
     """传统 Telea 修复适配器，保持与 AI 引擎相同的 inpaint 接口。"""
     def __init__(self) -> None:
@@ -278,6 +338,9 @@ class TorchScriptLaMaEngine:
             raise InpaintError(f"LaMa 推理失败：{exc}") from exc
         result_rgb = result[0].permute(1, 2, 0).detach().cpu().numpy()
         result_bgr = cv2.cvtColor(np.clip(result_rgb[:height, :width] * 255, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+        # 对话框等平坦底色中的稀疏文字优先使用真实邻域底色收尾，避免模型留下
+        # 灰色“幽灵笔画”。判定不成立时该函数不改变网络输出。
+        result_bgr = _finish_ink_on_flat_background(result_bgr, image_bgr, binary_mask)
         # 网络偶尔会轻微修改选区外像素；保持未遮罩区域完全不变。
         result_bgr[binary_mask == 0] = image_bgr[:, :, :3][binary_mask == 0]
         return result_bgr

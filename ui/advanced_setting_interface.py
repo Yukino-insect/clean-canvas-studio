@@ -56,8 +56,6 @@ class AdvancedSettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.ocr_group)
 
         self.mask_group.addSettingCard(self.mask_expand_pixels)
-        self.mask_group.addSettingCard(self.mask_refine_color_threshold)
-        self.mask_group.addSettingCard(self.mask_refine_min_area)
         self.expandLayout.addWidget(self.mask_group)
 
         self.video_group.addSettingCard(self.ocr_sample_step)
@@ -115,7 +113,7 @@ class AdvancedSettingInterface(ScrollArea):
             configItem=config.subtitleAreaDeviationPixel,
             icon=FluentIcon.ZOOM_IN,
             title="最终掩膜扩边（px）",
-            content="补偿 OCR 边缘、描边和抗锯齿；过大可能误伤背景。",
+            content="用于已确认手工矩形；0 px 可追求最小区域，过大可能误伤背景。",
             parent=self.mask_group,
         )
 
@@ -140,25 +138,11 @@ class AdvancedSettingInterface(ScrollArea):
             content="PaddleOCR 的 unclip_ratio；过大将削弱精确掩膜优势。",
             parent=self.ocr_group,
         )
-        self.mask_refine_color_threshold = RangeSettingCard(
-            configItem=config.maskRefineColorThreshold,
-            icon=FluentIcon.BRUSH,
-            title="轮廓细化色差阈值",
-            content="只在“OCR 多边形 + 轮廓细化”模式生效；低值更严格。",
-            parent=self.mask_group,
-        )
-        self.mask_refine_min_area = RangeSettingCard(
-            configItem=config.maskRefineMinArea,
-            icon=FluentIcon.FILTER,
-            title="细化最小连通域面积（px）",
-            content="过滤细化产生的小噪点；太高会漏掉标点或细笔画。",
-            parent=self.mask_group,
-        )
         self.ocr_sample_step = RangeSettingCard(
             configItem=config.ocrSampleStep,
             icon=FluentIcon.MOVIE,
-            title="采样 OCR 间隔（帧）",
-            content="选择“采样 OCR”策略后生效；越小越准确，也越慢。",
+            title="动态 OCR 采样间隔（帧）",
+            content="仅开启动态 OCR 且选择“采样检测”后生效；越小越准确，也越慢。",
             parent=self.video_group,
         )
 
@@ -251,21 +235,25 @@ class AdvancedSettingInterface(ScrollArea):
             "<p class='section-note'>用于移除图片或视频中的字幕、文字、符号和水印区域。</p>"
             "<ol>"
             "<li>添加任务：选择图片修复或视频修复，点击“打开”添加文件。</li>"
-            "<li>确认区域：点击“检测当前帧 OCR”获取候选框，也可以直接手动画框。检查、拖动、缩放或删除后，点击“确认修复区域”。</li>"
-            "<li>开始处理：红色半透明区域才是实际送入模型的掩膜；确认无误后点击“运行”。</li>"
+            "<li>选择“修复区域编辑方式”：可直接手动画框、逐笔涂鸦，或以手工框作为颜色筛选 ROI。它不是最终来源三选一：每种方式各自有预选区，点击其“确认…区域”只提交当前方式，红色区域显示所有已确认方式的组合。矩形/涂鸦编辑时只显示绿色框或橙色笔迹；颜色筛选以橙色显示临时结果。</li>"
+            "<li>开始处理：红色半透明区域才是实际送入模型的掩膜；确认无误后点击“运行”。视频的静态最终掩膜与“动态 OCR 字幕定位”只能二选一；若两种处理都需要，请先完成一次，再把输出视频作为新任务处理。 “运行”控制当前页面整个队列，所有符合条件的待处理任务会按顺序逐项执行，而非只运行当前选中行。</li>"
+            "<li>停止队列：点击“停止”会终止当前正在执行的内容修复任务；尚未开始的任务保留“待处理”，之后可再次点击“运行”继续。运行中新增媒体仍需先检测/手画并确认修复区域，才会加入当前队列。</li>"
             "</ol>"
             "<h4>修复模式</h4>"
-            "<p class='option'>OpenCV<br><span>速度最快的传统修复。不需要 AI 模型，也不使用 AI 设备设置。</span></p>"
-            "<p class='option'>LaMa<br><span>适合通用图像内容的 AI 修复。</span></p>"
-            "<p class='option'>Anime-LaMa<br><span>优先用于二次元插画、动画帧与线条清晰的内容。</span></p>"
-            "<p class='option'>Manga<br><span>面向黑白漫画风格内容；不建议作为普通彩色照片的默认选择。</span></p>"
-            "<h4>掩膜与视频策略</h4>"
-            "<p class='tip'>OCR 使用精确多边形；OCR 细化会进一步收紧轮廓；OCR 手工用于补充漏检符号；"
-            "手工矩形会修复框内区域。视频中，静态最快，采样 OCR 用于平衡速度与变化，逐帧 OCR 最精细也最耗时。</p>"
+            "<p class='option'>OpenCV Telea<br><span>速度最快的传统修复，优先试用于小文字、近纯色气泡/底板和连续纹理；不需要 AI 模型，也不使用 AI 设备设置。人物、密集线稿或大缺失区不适合它。</span></p>"
+            "<p class='option'>LaMa<br><span>通用 AI 修复，适合照片、自然背景和复杂纹理中的文字/水印。它生成的是合理猜测，不会恢复被遮挡的真实历史像素。</span></p>"
+            "<p class='option'>Anime-LaMa<br><span>优先用于彩色二次元插画、动画帧与线条清晰的内容。深色文字位于平坦气泡底色时，程序会在严格条件下用真实邻域底色清理 AI 留下的浅灰残笔；复杂结构仍需人工复核。</span></p>"
+            "<p class='option'>Manga<br><span>仅面向黑白/灰度漫画和线稿。它会先把 mask 内输入转为灰度再输出，彩色画面会失去色相与饱和度而发白、发灰；不要把它当作彩色 Anime-LaMa。</span></p>"
+            "<h4>先判断问题，再调参数</h4>"
+            "<p class='tip'>红色 mask 正确，只说明送入修复器的区域正确，不保证生成模型一定补得自然。白色气泡内有残字时，先在颜色筛选中让 ROI 与气泡边框保持约 2–3 px 距离，描边扩张从 1 px（必要时 2 px）开始，再比较 Telea 与 Anime-LaMa；不要靠无限扩大容差或框选整块气泡解决。文字压住人物、发丝、边框或密集线稿时，应缩小 mask 并比较 LaMa/Anime-LaMa。所有调整先在输出副本或 5–10 秒视频片段验证。</p>"
+            "<h4>掩膜来源与视频策略</h4>"
+            "<p class='tip'>OCR 候选只定位文本行，不承诺字符笔画级分割。手工矩形会修复框内区域；手工涂鸦直接决定像素 mask；"
+            "颜色筛选会在用户画出的 ROI 内，保留接近目标色且更接近目标色而非背景参考色的像素；“描边扩张”只在筛选后小幅扩大这些字形，用于补抗锯齿和描边。矩形、涂鸦和颜色筛选可分别确认，后台只合并这些明确确认过的来源；切换方式不会混用编辑中的草稿。视频中的“动态 OCR 字幕定位”是独立开关，且与静态组合掩膜二选一：开启后按采样或逐帧重新检测字幕；关闭后才复用已确认的组合 mask。需要两种方法时，请将第一次输出作为下一次的新输入。</p>"
             "<h3>画质增强</h3>"
             "<p class='section-note'>用于提升图片或视频的输出尺寸与清晰度，结果会另存，不会覆盖源文件。</p>"
             "<ol><li>选择图片任务或视频任务，设置模型、倍率和设备后，点击“打开”添加任务。</li>"
-            "<li>点击“运行”按队列执行。完成或失败的任务可以右键重置，再按当前设置重新处理。</li></ol>"
+            "<li>点击“运行”按队列顺序逐项执行全部待处理任务；一次只运行一个任务，不是当前选中行的单独启动按钮。运行中仍可点击“打开”追加新任务，它会在当前任务结束后自动接续。</li>"
+            "<li>点击“停止”会请求当前增强任务在安全取消点结束；尚未开始的任务保持“待处理”，之后可再次点击“运行”继续。完成或失败的任务可以右键重置，再按当前设置重新处理。</li></ol>"
             "<h4>模型与倍率</h4>"
             "<p class='option'>Anime / General<br><span>Anime 适合二次元插画和动画帧；General 更适合普通照片。</span></p>"
             "<p class='option'>输出倍率<br><span>1×保持原尺寸；2×、3×、4×会让宽和高约变为原来的 2、3、4 倍。倍率越大，处理时间、显存占用和输出文件也越大。4×视频的像素量约为原来的 16 倍。</span></p>"
@@ -274,16 +262,22 @@ class AdvancedSettingInterface(ScrollArea):
             "<h3>AI 设备与高级参数</h3>"
             "<h4>自动设备</h4>"
             "<p class='tip'>自动会先完整尝试 CUDA；若显卡不可用、驱动或显存异常、模型初始化失败，"
-            "再尝试 CPU，并使用第一个可用设备。显式选择 CUDA 或 CPU 时不会自动切换。</p>"
+            "再尝试 CPU，并使用第一个可用设备。显式选择 CUDA 或 CPU 时不会自动切换。PaddleOCR 使用独立的 Paddle CPU/GPU profile，"
+            "会优先尝试 GPU，初始化失败后自动重建为 CPU，不跟随这里的 PyTorch 设备选择。</p>"
             "<ul>"
             "<li>OCR 二值化阈值：降低可找回较弱文字或符号，但也更容易误识别纹理。</li>"
             "<li>OCR 候选置信度阈值：降低会保留更多候选多边形；必须在预览中人工确认。</li>"
             "<li>OCR 轮廓外扩比例：控制检测轮廓的初始外扩；过大可能侵占背景。</li>"
-            "<li>最终掩膜扩边：补偿描边、阴影和抗锯齿；红色区域覆盖背景时应减小。</li>"
-            "<li>轮廓细化色差 / 最小连通域：只在 OCR 细化时使用；前者越低越严格，后者过高会漏掉标点和细笔画。</li>"
-            "<li>采样 OCR 间隔：数值越小检测越密、画面变化时越稳，但处理更慢。</li>"
+            "<li>最终掩膜扩边：用于已确认的手工矩形；范围可设为 0–300 px。0 可追求最小区域，红色区域覆盖背景时应减小。</li>"
+            "<li>涂鸦笔刷半径：选择“手工涂鸦”后，任务页会显示笔刷按钮；按原始媒体像素计算。每一笔会冻结鼠标按下时的半径，之后调整粗细只影响下一笔。预览中的橙色线表示手工路径，确认后红色区域才是最终 mask。</li>"
+            "<li>颜色筛选：选择“颜色筛选”后，任务页会显示前景色、背景色、容差和描边扩张按钮；先用手工框限定 ROI，再检查橙色临时结果。描边扩张只会扩大筛到的字形，默认 1 px；它用于补抗锯齿/描边，过大仍可能吞入背景。点击“确认颜色筛选”后，它会并入红色组合 mask，而不是静默执行。容差范围为 0–255；渐变、透明、发光或多色文字通常更适合涂鸦。</li>"
+            "<li>动态 OCR 字幕定位：仅视频可用。开启后忽略已确认的组合 mask，改为在处理时自动检测每段字幕；关闭后视频使用已确认的矩形、涂鸦和/或颜色筛选组合。</li>"
+            "<li>动态 OCR 字幕像素精细定位：默认关闭。它紧跟内容修复页的“动态 OCR 检测频率”，仅在“视频修复 + 动态 OCR + 逐帧检测”时显示；切换为采样检测会隐藏并自动关闭它。开启后，页面底部才无标题地展开前景、背景、容差和描边扩张按钮，各按钮可悬浮查看用途。程序在每个处理帧重新计算字形 mask，以适应动态背景，绝不复用上一帧字形；但它是颜色启发式，不保证渐变、透明、发光、多色或与背景近似的字幕效果。旧任务若仍保存“采样 + 精细定位”，运行前会自动清除精细定位。</li>"
+            "<li>动态 OCR 检测频率：采样检测每隔若干帧 OCR，并以相邻检测结果覆盖中间帧，较快；逐帧检测每帧 OCR，更能跟随移动字幕但最慢。字幕像素精细定位只在逐帧检测下可选。</li>"
+            "<li>动态 OCR 采样间隔：仅“采样检测”使用。数值越小检测越密、画面变化时越稳，但处理更慢。</li>"
+            "<li>视频处理区间：仅视频可用，决定处理哪些帧，不决定修复哪些像素。在视频预览上右键选择“将当前帧设为处理起点”（或按 [），移动后再右键选择“将当前帧设为处理终点”（或按 ]）；起止帧均包含，支持多个区间。未设置区间时处理整段视频；右键“清除所有处理区间”会恢复全片处理。</li>"
             "</ul>"
-            "<p class='note'>输出目录留空时保存到输入媒体所在位置。清理 AI 模型缓存只会删除本程序下载的模型，不会删除原始图片、视频或 OCR 模型。</p>"
+            "<p class='note'>输出目录留空时保存到输入媒体所在位置。清理 AI 模型缓存只会删除本程序下载的模型，不会删除原始图片、视频或 OCR 模型。模型、掩膜、全图输入与视频编码的技术细节请参阅仓库 docs/REPAIR_AND_ENHANCEMENT_TECHNICAL_REFERENCE.md。</p>"
         )
 
     def show_parameter_help(self):

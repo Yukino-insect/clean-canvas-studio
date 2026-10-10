@@ -65,15 +65,18 @@ class ImageFormatInterface(QtWidgets.QWidget):
     def _create_widgets(self):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         left_layout = QtWidgets.QVBoxLayout()
         left_layout.setSpacing(8)
-        self.preview = MediaPreviewComponent("图片转换预览", self, placeholder="")
+        # 三个工作台均使用无标题黑底预览，并按“预览 2 : 日志 1”分配纵向
+        # 空间；避免图片转换的标题和较大日志下限让可见画布与其它页面不齐。
+        self.preview_log_layout = left_layout
+        self.preview = MediaPreviewComponent(parent=self, show_title=False, placeholder="")
         left_layout.addWidget(self.preview, 2)
         self.log = TextEdit(self)
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(165)
+        self.log.setMinimumHeight(150)
         self.log.document().setDocumentMargin(10)
         log_card = CardWidget(self)
         log_layout = QtWidgets.QVBoxLayout(log_card)
@@ -260,7 +263,17 @@ class ImageFormatInterface(QtWidgets.QWidget):
             return
         quality = self.quality_slider.value()
         self._set_working(True)
-        self._append_log(f"开始转换：{self._source_path.name} → {target_path.name}（{output_format}）。")
+        # 图片转换没有任务队列：配置在用户点击“转换并保存”时读取，因此在此
+        # 之前的格式、质量或 ICO 尺寸修改都会正确生效。写入完整快照，避免
+        # 用户只能从最终文件名猜测实际采用了什么设置。
+        option_parts = [f"输出格式={output_format}"]
+        if output_format in {"JPEG", "WEBP"}:
+            option_parts.append(f"质量={quality}")
+        if output_format == "ICO":
+            option_parts.append("ICO 尺寸=" + "、".join(f"{size}px" for size in ico_sizes))
+        self._append_log(
+            f"开始转换：{self._source_path.name} → {target_path.name}（" + "，".join(option_parts) + "）。"
+        )
 
         def work():
             try:

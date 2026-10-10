@@ -7,11 +7,11 @@ set -Eeuo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  bash scripts/install-runtime.sh [--torch-backend cpu|cu126] [--python PATH]
+  bash scripts/install-runtime.sh [--torch-backend cpu|cu126] [--paddle-backend cpu|cu118] [--python PATH]
 
 Examples:
-  bash scripts/install-runtime.sh --torch-backend cpu --python python3
-  bash scripts/install-runtime.sh --torch-backend cu126 --python .venv/Scripts/python.exe
+  bash scripts/install-runtime.sh --torch-backend cpu --paddle-backend cpu --python python3
+  bash scripts/install-runtime.sh --torch-backend cu126 --paddle-backend cu118 --python .venv/Scripts/python.exe
 
 The committed locks target Windows/Linux x86_64 + CPython 3.12. Re-resolve
 the requirements for other operating systems, Python versions, or CUDA backends.
@@ -19,6 +19,7 @@ EOF
 }
 
 torch_backend="cpu"
+paddle_backend="cpu"
 python_bin="python3"
 
 while (($# > 0)); do
@@ -26,6 +27,11 @@ while (($# > 0)); do
         --torch-backend|-b)
             [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
             torch_backend="$2"
+            shift 2
+            ;;
+        --paddle-backend)
+            [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+            paddle_backend="$2"
             shift 2
             ;;
         --python|-p)
@@ -54,6 +60,15 @@ case "$torch_backend" in
         ;;
     *)
         echo "Unsupported --torch-backend: $torch_backend (expected cpu or cu126)" >&2
+        exit 2
+        ;;
+esac
+
+case "$paddle_backend" in
+    cpu|cu118)
+        ;;
+    *)
+        echo "Unsupported --paddle-backend: $paddle_backend (expected cpu or cu118)" >&2
         exit 2
         ;;
 esac
@@ -89,12 +104,41 @@ fi
 
 base_lock="$requirements_root/base${profile_suffix}.lock"
 torch_lock="$requirements_root/torch-${torch_backend}${profile_suffix}.lock"
+paddle_lock="$requirements_root/paddle-${paddle_backend}${profile_suffix}.lock"
+paddle_cpu_lock="$requirements_root/paddle-cpu${profile_suffix}.lock"
 
 [[ -f "$base_lock" ]] || { echo "Missing dependency lock: $base_lock" >&2; exit 1; }
 [[ -f "$torch_lock" ]] || { echo "Missing PyTorch profile lock: $torch_lock" >&2; exit 1; }
+[[ -f "$paddle_lock" ]] || { echo "Missing PaddlePaddle profile lock: $paddle_lock" >&2; exit 1; }
+[[ -f "$paddle_cpu_lock" ]] || { echo "Missing PaddlePaddle CPU fallback lock: $paddle_cpu_lock" >&2; exit 1; }
 
 echo "Installing locked base dependencies..."
 "$python_bin" -m pip install --require-hashes -r "$base_lock"
+
+echo "Selecting PaddlePaddle profile: $paddle_backend..."
+# CPU and GPU Paddle wheels expose the same import package and must not coexist.
+"$python_bin" -m pip uninstall -y paddlepaddle paddlepaddle-gpu
+paddle_index_args=()
+if [[ "$paddle_backend" == "cu118" ]]; then
+    # The GPU wheel is hosted on Paddle's official package index, not PyPI.
+    paddle_index_args=(--extra-index-url "https://www.paddlepaddle.org.cn/packages/stable/cu118/")
+fi
+if ! "$python_bin" -m pip install --require-hashes -r "$paddle_lock" "${paddle_index_args[@]}"; then
+    if [[ "$paddle_backend" != "cu118" ]]; then
+        echo "PaddlePaddle profile installation failed." >&2
+        exit 1
+    fi
+    echo "Paddle GPU profile installation failed; installing the locked CPU profile instead." >&2
+    "$python_bin" -m pip install --require-hashes -r "$paddle_cpu_lock"
+    paddle_backend="cpu"
+fi
+"$python_bin" - <<'PY'
+import paddle
+
+print(f"paddle={paddle.__version__}")
+print(f"compiled_with_cuda={paddle.is_compiled_with_cuda()}")
+print(f"cuda_available={paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0}")
+PY
 
 echo "Installing locked PyTorch profile: $torch_backend..."
 # PyTorch wheels use the official PyTorch index. Torch's ordinary Python
@@ -112,4 +156,7 @@ PY
 
 if [[ "$torch_backend" == "cu126" ]]; then
     echo "CUDA wheel installed. cuda_available must be True before selecting CUDA in the application."
+fi
+if [[ "$paddle_backend" == "cu118" ]]; then
+    echo "Paddle GPU wheel installed. OCR will try GPU first and automatically fall back to CPU if runtime initialization fails."
 fi

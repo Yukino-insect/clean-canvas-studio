@@ -30,8 +30,10 @@ from backend.config import config, tr
 from backend.inpaint.engine import InpaintError, InpaintMode, create_inpaint_engine
 from backend.tools.common_tools import get_readable_path, is_image_file, is_video_or_image, read_image
 from backend.tools.ffmpeg_cli import FFmpegCLI
-from backend.inpaint.mask import regions_to_mask
-from backend.masking import MaskMode, MaskPlan, OcrPolygon, VideoMaskStrategy, build_mask
+from backend.masking import (
+    MaskMode, MaskPlan, OcrPolygon, VideoMaskStrategy, build_mask, polygon_mask,
+    refine_ocr_polygon_mask,
+)
 from backend.tools.inpaint_tools import is_frame_number_in_ab_sections
 from backend.tools.subtitle_detect import SubtitleDetect
 from backend.tools.video_io import FramePrefetcher, FFmpegVideoWriter
@@ -100,10 +102,15 @@ class SubtitleRemover:
         self.is_successful_merged = False
         self.progress_listeners: list[ProgressListener] = []
         self.ab_sections = None
-        # GUI 在 OCR 审核后把确认/手工框传入 manual_regions；它们是直接擦除
-        # 区域，而不是旧流程中“仅供 OCR 过滤”的候选 ROI。
-        self.manual_regions: list[tuple[int, int, int, int]] = []
-        self.use_ocr_detection = True
+        # 动态 OCR 只在视频中定位每帧字幕；它不属于任何冻结的最终 mask 计划。
+        self.video_dynamic_ocr = False
+        # 与任务快照一同从 GUI 传入。默认关闭，因而历史任务仍使用原始
+        # OCR 多边形掩膜；开启后才按字幕前景色精细定位字形像素。
+        self.dynamic_ocr_refine_mask = config.dynamicOcrRefineMask.value
+        self.dynamic_ocr_foreground = config.dynamicOcrForeground.value
+        self.dynamic_ocr_background = config.dynamicOcrBackground.value
+        self.dynamic_ocr_refine_tolerance = config.dynamicOcrRefineTolerance.value
+        self.dynamic_ocr_outline_expand = config.dynamicOcrOutlineExpand.value
         self.inpaint_mode = InpaintMode.OPENCV.value
         self.ai_device = "auto"
         self.model_dir: str | None = None
@@ -111,15 +118,34 @@ class SubtitleRemover:
         # 第一帧/图片时才初始化，避免用户打开媒体即占用显存或触发下载。
         self._inpaint_engine = None
         self.mask_plan: dict | None = None
-        self.video_mask_strategy = VideoMaskStrategy.STATIC.value
+        self.video_mask_strategy = VideoMaskStrategy.SAMPLED_OCR.value
 
     def update_progress(self, tbar: tqdm, increment: int) -> None:
         """推进统一百分比并通知所有前端监听器。"""
         tbar.update(increment)
+        # 任务进度与预览时间轴只能表示已修复并写出的实际视频帧。动态 OCR
+        # 的定位扫描会在日志中单独报告，不能借用任务百分比，否则滑块会在
+        # 画面尚未处理时提前跳动。
         current_percentage = (tbar.n / tbar.total) * 100 if tbar.total else 100
-        self.progress_remover = int(current_percentage)
-        self.progress_total = self.progress_remover
+        if tbar.n < tbar.total:
+            current_percentage = max(1, current_percentage)
+        self._set_progress_percentage(current_percentage)
+
+    def _set_progress_percentage(self, percentage: float) -> None:
+        """发布单调的任务总进度，并避免为同一整数百分比重复发送 IPC 消息。"""
+        value = max(0, min(100, int(percentage)))
+        if value == self.progress_total:
+            return
+        self.progress_remover = value
+        self.progress_total = value
         self.notify_progress_listeners()
+
+    def begin_dynamic_ocr_scan(self, strategy: VideoMaskStrategy) -> None:
+        """在日志中标记动态 OCR 的预处理开始，不改变任务/时间轴进度。"""
+        self.append_output(
+            f"正在初始化动态 OCR 并扫描字幕位置（{strategy.value}）。"
+            "定位阶段仅输出日志；任务进度将在开始逐帧修复后更新。"
+        )
 
     def append_output(self, *args: object) -> None:
         print(*args)
@@ -141,16 +167,6 @@ class SubtitleRemover:
 
     def update_preview_with_comp(self, frame_ori: np.ndarray, frame_comp: np.ndarray) -> None:
         """供 GUI 覆写，用于显示原始帧与处理后帧。"""
-
-    @staticmethod
-    def _valid_regions(regions: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
-        """过滤竖向长条等明显不属于字幕/水印的检测框。"""
-        return [
-            region
-            for region in regions
-            if (region[3] - region[2]) - (region[1] - region[0])
-            <= config.subtitleYXAxisDifferencePixel.value
-        ]
 
     def _engine(self):
         """按当前模式创建并缓存修复引擎，整个任务复用同一模型实例。"""
@@ -174,29 +190,31 @@ class SubtitleRemover:
     def _mask(
         self,
         frame: np.ndarray,
-        regions: list[tuple[int, int, int, int]] | None = None,
         polygons: list[OcrPolygon] | None = None,
     ) -> np.ndarray:
-        # 已确认的 MaskPlan 优先级最高；仅当不存在计划时才回退到旧式矩形区域。
+        if polygons is not None:
+            if getattr(self, "dynamic_ocr_refine_mask", False):
+                return refine_ocr_polygon_mask(
+                    frame,
+                    polygons,
+                    getattr(self, "dynamic_ocr_foreground", config.dynamicOcrForeground.value),
+                    getattr(self, "dynamic_ocr_background", config.dynamicOcrBackground.value),
+                    getattr(self, "dynamic_ocr_refine_tolerance", config.dynamicOcrRefineTolerance.value),
+                    getattr(self, "dynamic_ocr_outline_expand", config.dynamicOcrOutlineExpand.value),
+                )
+            return polygon_mask(frame.shape, polygons, config.subtitleAreaDeviationPixel.value)
         plan = self._plan()
         if plan:
-            if polygons is not None:
-                plan = plan.with_polygons(polygons)
             return build_mask(frame, plan)
-        return regions_to_mask(
-            frame.shape,
-            regions or [],
-            expand_pixels=config.subtitleAreaDeviationPixel.value,
-        )
+        return np.zeros(frame.shape[:2], dtype=np.uint8)
 
     def _repair(
         self,
         frame: np.ndarray,
-        regions: list[tuple[int, int, int, int]] | None = None,
         polygons: list[OcrPolygon] | None = None,
     ) -> np.ndarray:
         """为单帧构造 mask、执行修复，并向 GUI 发送可视化对比。"""
-        mask = self._mask(frame, regions, polygons)
+        mask = self._mask(frame, polygons)
         if not np.any(mask):
             return frame
         repaired = self._engine().inpaint(frame, mask)
@@ -206,40 +224,50 @@ class SubtitleRemover:
         )
         return repaired
 
+    def _effective_dynamic_ocr_strategy(self) -> VideoMaskStrategy:
+        """Return a safe dynamic OCR strategy and reject stale refine snapshots.
+
+        Pixel refinement derives a glyph mask from each *current* frame.  A
+        sampled OCR map intentionally reuses detections between sample frames,
+        therefore a stale task/configuration containing both options must never
+        silently apply refinement while sampling.  The main UI prevents this
+        combination; this runtime guard also protects old task snapshots, CLI
+        integrations and future callers that bypass the UI.
+        """
+        strategy = VideoMaskStrategy(self.video_mask_strategy)
+        if strategy is VideoMaskStrategy.SAMPLED_OCR and self.dynamic_ocr_refine_mask:
+            self.dynamic_ocr_refine_mask = False
+            self.append_output(
+                "动态 OCR 当前使用采样检测：已忽略任务快照中的字幕像素精细定位，"
+                "以避免跨帧复用精细字形 mask。"
+            )
+        return strategy
+
     def remove_video_subtitles(self, tbar: tqdm) -> None:
         """按视频策略生成每帧掩膜，并使用当前选择的修复引擎写出结果。"""
-        subtitle_frames: dict[int, list[tuple[int, int, int, int]]] = {}
         polygon_frames: dict[int, list[OcrPolygon]] = {}
-        sub_detector = None
         plan = self._plan()
-        strategy = VideoMaskStrategy(self.video_mask_strategy)
-        # 静态计划直接复用用户确认的 mask；采样/逐帧策略重新收集 OCR 多边形。
-        static_plan = plan is not None and strategy is VideoMaskStrategy.STATIC
-        if static_plan:
-            self.append_output(f"使用已确认的精确掩膜计划：{plan.mode.value}（静态复用）。")
-        elif plan is not None and strategy is not VideoMaskStrategy.STATIC:
+        strategy = self._effective_dynamic_ocr_strategy()
+        if self.video_dynamic_ocr:
+            refine_hint = "，字幕像素精细定位已开启" if self.dynamic_ocr_refine_mask else ""
+            self.append_output(f"动态 OCR 字幕定位已启用：{strategy.value}{refine_hint}。")
             sub_detector = SubtitleDetect(self.video_path, self.sub_areas)
+            self.begin_dynamic_ocr_scan(strategy)
             polygon_frames = sub_detector.find_polygon_frame_map(
                 strategy,
                 sub_remover=self,
                 sample_step=config.ocrSampleStep.value,
             )
-            if not polygon_frames and plan.mode is not MaskMode.MIXED:
+            if not polygon_frames:
                 raise RuntimeError(tr["Main"]["NoSubtitleDetected"].format(self.video_path))
-        elif self.manual_regions:
-            # 经人工确认或直接手画的区域，在处理区间中按静态掩膜应用；这使 OCR
-            # 漏检的艺术字、符号和 logo 终于可以被真正移除。
-            subtitle_frames = {
-                frame_no: list(self.manual_regions)
-                for frame_no in range(1, self.frame_count + 1)
-                if is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections)
-            }
-            self.append_output(f"使用 {len(self.manual_regions)} 个已确认/手工修复区域。")
-        elif self.use_ocr_detection:
-            sub_detector = SubtitleDetect(self.video_path, self.sub_areas)
-            subtitle_frames = sub_detector.find_subtitle_frame_no(sub_remover=self)
-        if not static_plan and not polygon_frames and not subtitle_frames:
+            self.append_output(
+                f"动态 OCR 定位完成：已为 {len(polygon_frames)} 帧生成字幕区域；"
+                "现在开始逐帧修复与编码，任务进度将随实际输出帧更新。"
+            )
+        elif plan is None:
             raise RuntimeError(tr["Main"]["NoSubtitleDetected"].format(self.video_path))
+        else:
+            self.append_output(f"使用已确认的最终掩膜计划：{plan.mode.value}。")
 
         self.append_output(tr["Main"]["ProcessingStartRemovingSubtitles"])
         reader = FramePrefetcher(self.video_cap)
@@ -250,17 +278,11 @@ class SubtitleRemover:
                 if not ret:
                     break
                 frame_no += 1
-                raw_regions = subtitle_frames.get(frame_no, [])
                 polygons = polygon_frames.get(frame_no)
-                regions = raw_regions if self.manual_regions else self._valid_regions(raw_regions)
-                # 分支顺序体现掩膜来源优先级：静态确认计划、动态 OCR 多边形、
-                # 手工/旧式矩形区域，最后是不做修复的原帧。
-                if static_plan and is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections):
-                    repaired = self._repair(frame)
-                elif polygons or (plan is not None and plan.mode is MaskMode.MIXED and is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections)):
+                if self.video_dynamic_ocr and polygons:
                     repaired = self._repair(frame, polygons=polygons or [])
-                elif regions:
-                    repaired = self._repair(frame, regions)
+                elif not self.video_dynamic_ocr and is_frame_number_in_ab_sections(frame_no - 1, self.ab_sections):
+                    repaired = self._repair(frame)
                 else:
                     repaired = frame
                     self.update_preview_with_comp(frame, repaired)
@@ -268,7 +290,8 @@ class SubtitleRemover:
                 self.update_progress(tbar, increment=1)
         finally:
             reader.stop()
-            del sub_detector
+            if self.video_dynamic_ocr:
+                del sub_detector
             gc.collect()
 
     def remove_image_subtitles(self) -> None:
@@ -276,25 +299,10 @@ class SubtitleRemover:
         original_frame = read_image(self.video_path)
         if original_frame is None:
             raise RuntimeError(tr["Main"]["ReadImageFailed"].format(self.video_path))
-        sub_detector = None
         plan = self._plan()
-        if plan is not None:
-            repaired = self._repair(original_frame)
-            regions = []
-        elif self.manual_regions:
-            regions = list(self.manual_regions)
-        elif self.use_ocr_detection:
-            sub_detector = SubtitleDetect(self.video_path, self.sub_areas)
-            regions = self._valid_regions(sub_detector.detect_subtitle(original_frame))
-        else:
-            regions = []
-        if plan is not None:
-            pass
-        elif regions:
-            repaired = self._repair(original_frame, regions)
-        else:
-            repaired = original_frame
-            self.update_preview_with_comp(original_frame, repaired)
+        if plan is None:
+            raise RuntimeError("图片修复需要先确认最终掩膜。")
+        repaired = self._repair(original_frame)
         output_ext = Path(self.video_out_path).suffix.lower() or self.ext.lower() or ".png"
         if output_ext not in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}:
             output_ext = ".png"
@@ -302,7 +310,6 @@ class SubtitleRemover:
         if not encoded:
             raise RuntimeError(f"无法编码图片输出：{self.video_out_path}")
         data.tofile(self.video_out_path)
-        del sub_detector
         gc.collect()
 
     def merge_audio_to_video(self) -> None:
@@ -362,12 +369,11 @@ class SubtitleRemover:
         }
         self.append_output(tr["Main"]["SubtitleRemoverModel"].format(mode_info.get(self.inpaint_mode, self.inpaint_mode)))
         plan = self._plan()
-        if plan:
-            self.append_output(f"修复区域来源: 已确认的 {plan.mode.value} 精确掩膜计划。")
-        elif self.manual_regions:
-            self.append_output("修复区域来源: 用户确认的 OCR/手工框（不再进行隐藏的二次 OCR）。")
-        elif self.use_ocr_detection:
-            self.append_output(tr["Main"]["SubtitleDetectionModel"].format("PP-OCRv5 Server (CPU)"))
+        if self.video_dynamic_ocr and not self.is_picture:
+            self.append_output(f"修复区域来源: 动态 OCR 字幕定位（{self.video_mask_strategy}）。")
+        elif plan:
+            sources = "、".join(mode.value for mode in plan.source_modes) or plan.mode.value
+            self.append_output(f"修复区域来源: 已确认的组合掩膜计划（{sources}）。")
 
     def _remove_temporary_video(self) -> None:
         """关闭并删除视频处理的临时文件；图片流程不会创建它。"""
@@ -386,9 +392,16 @@ class SubtitleRemover:
     def run(self) -> None:
         """执行完整任务，并确保视频句柄、写入器和临时文件最终得到清理。"""
         start_time = time.time()
-        if not self.mask_plan and not self.manual_regions and not self.use_ocr_detection:
+        if self.video_dynamic_ocr and not self.is_picture and self.mask_plan:
+            raise RuntimeError(
+                "动态 OCR 字幕定位与静态最终掩膜不能在同一视频任务中同时执行。"
+                "请只保留一种策略；若两种方式都需要，请将第一次输出作为新任务处理。"
+            )
+        if not self.mask_plan and not (self.video_dynamic_ocr and not self.is_picture):
             raise RuntimeError("没有可修复区域。请先确认 OCR 结果或手动画框后确认。")
-        self.append_output(tr["Main"]["SubtitleArea"].format(self.manual_regions or self.sub_areas))
+        if self.video_dynamic_ocr and not self.is_picture:
+            self._effective_dynamic_ocr_strategy()
+        self.append_output(tr["Main"]["SubtitleArea"].format(self.sub_areas))
         self.append_output(
             tr["Main"]["ABSection"].format(
                 str(self.ab_sections).replace("range", "")
@@ -399,7 +412,9 @@ class SubtitleRemover:
         self.progress_total = 0
         tbar = tqdm(
             total=max(self.frame_count, 1), unit="frame", position=0,
-            file=sys.__stdout__, desc="Subtitle Removing",
+            # 使用当前 stdout：GUI 子进程会把 stdout/stderr 接入消息桥，CLI
+            # 则仍自然输出到控制台。此前强制 sys.__stdout__ 会绕过 GUI 日志。
+            file=sys.stdout, desc="Subtitle Removing",
         )
         completed = False
         try:
@@ -441,8 +456,14 @@ if __name__ == "__main__":
         remover.append_output(f"Error: {remover.video_path} is not supported or is corrupted.")
         raise SystemExit(1)
     remover.sub_areas = args.subtitle_area_coords
-    remover.manual_regions = [tuple(region) for region in args.manual_area]
-    remover.use_ocr_detection = not args.no_ocr
+    if args.manual_area:
+        remover.mask_plan = MaskPlan(
+            mode=MaskMode.RECTANGLE,
+            manual_regions=[tuple(region) for region in args.manual_area],
+            expand_pixels=config.subtitleAreaDeviationPixel.value,
+        ).to_dict()
+    remover.video_dynamic_ocr = args.dynamic_ocr
+    remover.video_mask_strategy = args.ocr_strategy
     remover.inpaint_mode = args.mode
     remover.ai_device = args.device
     remover.model_dir = args.model_dir

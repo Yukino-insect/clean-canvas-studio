@@ -78,6 +78,7 @@ class VideoDisplayComponent(QWidget):
 
     # 定义信号
     selections_changed = Signal(list)  # 选择框变化信号
+    brush_strokes_changed = Signal(list)  # 手工涂鸦路径变化信号
     ab_sections_changed = Signal(list)  # AB分区变化信号
 
     def __init__(self, parent=None):
@@ -93,6 +94,14 @@ class VideoDisplayComponent(QWidget):
         self.resize_edge = None
         self.edge_size = 10  # 调整大小的边缘区域
         self.enable_mouse_events = True  # 控制是否启用鼠标事件
+        # 涂鸦以相对源图坐标和“逐笔冻结的半径”保存，和当前预览分辨率、窗口
+        # 缩放及之后改动的笔刷粗细无关。它是最终 mask 的直接来源，不复用为
+        # OCR 的候选区域。
+        self.brush_mode = False
+        self.brush_visible = False
+        self._painting_brush = False
+        self.brush_radius = config.brushRadius.value
+        self.brush_strokes = []
 
         # AB分区标记相关变量
         self.ab_sections = []  # 存储AB分区标记 [range(start, end), ...]
@@ -154,7 +163,9 @@ class VideoDisplayComponent(QWidget):
         video_layout = QVBoxLayout()
         video_layout.setSpacing(0)
         video_layout.setContentsMargins(2, 2, 2, 2)
-        video_layout.setAlignment(Qt.AlignCenter)
+        # 不在外层布局上设置 AlignCenter。该对齐会把黑色画布钉死在 16:9
+        # 的 size hint，即使内容修复页已经得到更多垂直空间也不会变大；其它
+        # 工作台则会让黑底预览填满分配区域。媒体内容本身仍由内部比例容器居中。
 
         # 创建内部黑色背景容器
         self.black_container = QWidget(self)
@@ -169,7 +180,7 @@ class VideoDisplayComponent(QWidget):
         black_layout = QVBoxLayout()
         black_layout.setContentsMargins(0, 0, 0, 0)
         black_layout.setSpacing(0)
-        black_layout.setAlignment(Qt.AlignCenter)
+        # 让黑色画布随父布局扩张，内部 QLabel 继续按实际媒体比例留黑边。
 
         # 视频显示标签
         self.video_display = QtWidgets.QLabel()
@@ -376,6 +387,8 @@ class VideoDisplayComponent(QWidget):
                 # 绘制选择框
                 painter.drawRect(pixel_rect)
 
+            self._draw_brush_strokes(painter, pixmap_copy)
+
             # 如果正在绘制新选区，也绘制它
             if self.is_drawing and any(self.selection_rect):
                 pen = QtGui.QPen(QtGui.QColor(0, 255, 0))  # 绿色
@@ -442,9 +455,126 @@ class VideoDisplayComponent(QWidget):
         # 更新显示
         self.video_display.setPixmap(pixmap_copy)
 
+    def _draw_brush_strokes(self, painter, pixmap):
+        """将正在编辑的涂鸦以项目既有的高对比辅助色叠加到预览中。"""
+        if not self.brush_visible or not self.brush_strokes or not self.frame_width:
+            return
+        for stroke in self.brush_strokes:
+            points_value = stroke.get("points", [])
+            if not points_value:
+                continue
+            preview_radius = max(1, round(stroke["radius"] * pixmap.width() / self.frame_width))
+            pen = QtGui.QPen(QtGui.QColor(255, 176, 0, 210), preview_radius * 2)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(pen)
+            points = [
+                QtCore.QPointF(
+                    (self.border_left + x * self.scaled_width) * pixmap.width(),
+                    (self.border_top + y * self.scaled_height) * pixmap.height(),
+                )
+                for x, y in points_value
+            ]
+            if len(points) == 1:
+                painter.drawPoint(points[0])
+                continue
+            path = QtGui.QPainterPath(points[0])
+            for point in points[1:]:
+                path.lineTo(point)
+            painter.drawPath(path)
+
+    def _source_point_from_event(self, event):
+        """将 QLabel 鼠标位置映射到未填黑边的原始媒体相对坐标。"""
+        width, height = self.video_display.width(), self.video_display.height()
+        if width <= 0 or height <= 0 or not self.scaled_width or not self.scaled_height:
+            return None
+        x_display = event.pos().x() / width
+        y_display = event.pos().y() / height
+        x = (x_display - self.border_left) / self.scaled_width
+        y = (y_display - self.border_top) / self.scaled_height
+        if not (0 <= x <= 1 and 0 <= y <= 1):
+            return None
+        return max(0.0, min(1.0, x)), max(0.0, min(1.0, y))
+
+    def set_brush_mode(self, enabled: bool):
+        """启用/退出涂鸦。退出后恢复现有的矩形编辑交互。"""
+        self.brush_mode = bool(enabled)
+        self._painting_brush = False
+        self.is_drawing = False
+        self.resize_edge = None
+        self.video_display.setCursor(Qt.CrossCursor if self.brush_mode else Qt.ArrowCursor)
+
+    def set_brush_visible(self, visible: bool):
+        """仅在手工涂鸦模式显示橙色编辑路径，避免污染其他模式预览。"""
+        self.brush_visible = bool(visible)
+        if not self.brush_visible:
+            self.set_brush_mode(False)
+        self.update_preview_with_rect()
+
+    def set_brush_radius(self, radius: int):
+        self.brush_radius = max(1, int(radius))
+        self.update_preview_with_rect()
+
+    def set_brush_strokes(self, strokes, *, emit=False):
+        """加载逐笔笔迹，兼容旧版 ``[[x, y], ...]`` 点列。"""
+        normalized = []
+        for stroke in strokes or []:
+            raw_points = stroke.get("points", []) if isinstance(stroke, dict) else stroke
+            radius = stroke.get("radius", self.brush_radius) if isinstance(stroke, dict) else self.brush_radius
+            points = [
+                (max(0.0, min(1.0, float(point[0]))), max(0.0, min(1.0, float(point[1]))))
+                for point in raw_points or []
+                if len(point) >= 2
+            ]
+            if points:
+                normalized.append({"points": points, "radius": max(1, int(radius))})
+        self.brush_strokes = normalized
+        self.update_preview_with_rect()
+        if emit:
+            self.brush_strokes_changed.emit(self.get_brush_strokes())
+
+    def get_brush_strokes(self):
+        return [
+            {"points": [list(point) for point in stroke["points"]], "radius": stroke["radius"]}
+            for stroke in self.brush_strokes
+        ]
+
+    def clear_brush_strokes(self):
+        self.brush_strokes = []
+        self._painting_brush = False
+        self.update_preview_with_rect()
+        self.brush_strokes_changed.emit([])
+
+    def clear_media_preview(self):
+        """清空未绑定任务时的可视状态，且不向上一层写回任何任务草稿。"""
+        self.is_drawing = False
+        self._painting_brush = False
+        self.selection_rects = []
+        self.active_selection_index = -1
+        self.brush_strokes = []
+        self.ab_sections = []
+        self.current_ab_start = -1
+        self.current_pixmap = None
+        self.frame_width = None
+        self.frame_height = None
+        self.video_display.clear()
+
     def selection_mouse_press(self, event):
         """鼠标按下事件处理"""
         if not self.enable_mouse_events:
+            return
+
+        if self.brush_mode:
+            if event.button() != Qt.LeftButton:
+                return
+            point = self._source_point_from_event(event)
+            if point is None:
+                return
+            self._painting_brush = True
+            # 半径在鼠标按下时冻结；之后调节笔刷只影响下一笔，历史涂鸦的
+            # 预览和实际修复 mask 保持不变。
+            self.brush_strokes.append({"points": [point], "radius": self.brush_radius})
+            self.update_preview_with_rect()
             return
 
         # 右键点击显示上下文菜单
@@ -583,6 +713,16 @@ class VideoDisplayComponent(QWidget):
         if not self.enable_mouse_events:
             return
 
+        if self.brush_mode:
+            if self._painting_brush and self.brush_strokes:
+                point = self._source_point_from_event(event)
+                if point is not None:
+                    stroke = self.brush_strokes[-1]["points"]
+                    if not stroke or point != stroke[-1]:
+                        stroke.append(point)
+                        self.update_preview_with_rect()
+            return
+
         video_display_width = self.video_display.width()
         video_display_height = self.video_display.height()
 
@@ -650,6 +790,12 @@ class VideoDisplayComponent(QWidget):
     def selection_mouse_release(self, event):
         """鼠标释放事件处理"""
         if not self.enable_mouse_events:
+            return
+
+        if self.brush_mode:
+            if self._painting_brush:
+                self._painting_brush = False
+                self.brush_strokes_changed.emit(self.get_brush_strokes())
             return
 
         # 结束绘制或调整
@@ -964,22 +1110,13 @@ class VideoDisplayComponent(QWidget):
         """处理标记AB分区起点的逻辑"""
         if not self._is_video_media or not self.enable_mouse_events:
             return False
-        current_frame = self.video_slider.value()
+        current_frame = self.video_slider.value() - 1
         if current_frame >= 0:
-            # 检查是否需要调整已有区间
-            adjusted = False
-            for i, section_range in enumerate(self.ab_sections):
-                if current_frame in section_range:
-                    # 调整已有区间的起点
-                    self.ab_sections[i] = range(current_frame, section_range.stop)
-                    adjusted = True
-                    break
-
-            if not adjusted:
-                # 记录新的AB分区起点
-                self.current_ab_start = current_frame
-
-            # 更新显示
+            # 起点只是一次尚未完成的区间编辑，不修改任何已确认区间；这样用户
+            # 能明确看到“先定起点，再定终点”的状态，不会意外改写旧区段。
+            self.current_ab_start = current_frame
+            # 复用现有信号刷新外部的区间摘要；列表中保存的仍只有已确认区段。
+            self.ab_sections_changed.emit(self.ab_sections)
             self.update_preview_with_rect()
             return True
         return False
@@ -988,28 +1125,14 @@ class VideoDisplayComponent(QWidget):
         """处理标记AB分区终点的逻辑"""
         if not self._is_video_media or not self.enable_mouse_events:
             return False
-        current_frame = self.video_slider.value()
+        current_frame = self.video_slider.value() - 1
         if current_frame >= 0 and self.current_ab_start >= 0:
-            # 检查是否需要调整已有区间
-            adjusted = False
-            # 遍历现有的 ab 分区
-            for i, section_range in enumerate(self.ab_sections):
-                # 如果当前帧在其中一个分区
-                if current_frame in section_range:
-                    # 调整当前区间的终点
-                    self.ab_sections[i] = range(section_range.start, current_frame + 1)
-                    # 记录当前帧是调整操作
-                    adjusted = True
-                    break
-
-            # 如果没有对已有的 ab 区间调整
-            if not adjusted and self.current_ab_start != current_frame:
-                # 添加新的AB分区
-                self.ab_sections.append(range(self.current_ab_start, current_frame + 1))
-                self.current_ab_start = -1  # 重置起点
-                self.ab_sections_changed.emit(self.ab_sections)
-
-            # 更新显示
+            start, end = sorted((self.current_ab_start, current_frame))
+            # range 的 stop 是开区间，因此 +1 才会包含用户选择的终点帧；同一
+            # 帧也会生成长度为 1 的合法区间，适合只修一帧的场景。
+            self.ab_sections.append(range(start, end + 1))
+            self.current_ab_start = -1
+            self.ab_sections_changed.emit(self.ab_sections)
             self.update_preview_with_rect()
             return True
         return False
@@ -1018,7 +1141,7 @@ class VideoDisplayComponent(QWidget):
         """处理删除当前AB区块的逻辑"""
         if not self._is_video_media or not self.enable_mouse_events:
             return False
-        current_frame = self.video_slider.value()
+        current_frame = self.video_slider.value() - 1
         if current_frame >= 0 and self.ab_sections:
             # 查找当前帧所在的AB区块
             for i, section_range in enumerate(self.ab_sections):
@@ -1084,6 +1207,11 @@ class VideoDisplayComponent(QWidget):
         self.action_mark_ab_delete.triggered.connect(self.__handle_delete_ab_section)
         self.context_menu.addAction(self.action_mark_ab_delete)
 
+        self.action_clear_ab_sections = QAction("清除所有处理区间", self)
+        self.action_clear_ab_sections.setShortcut("Ctrl+\\")
+        self.action_clear_ab_sections.triggered.connect(self.clear_ab_sections)
+        self.context_menu.addAction(self.action_clear_ab_sections)
+
         self.action_delete_selection = QAction(tr['SubtitleExtractorGUI']['DeleteSelection'], self)
         self.action_delete_selection.setShortcut("DELETE")
         self.action_delete_selection.triggered.connect(self.__handle_delete_selection)
@@ -1092,18 +1220,31 @@ class VideoDisplayComponent(QWidget):
     def __update_context_menu_actions(self):
         """只展示当前媒体、当前帧和当前选区确实能够执行的右键操作。"""
         is_video = self._is_video_media
-        current_frame = self.video_slider.value()
+        current_frame = self.video_slider.value() - 1
         current_section_exists = any(current_frame in section for section in self.ab_sections)
 
         self.action_mark_ab_start.setVisible(is_video)
         # 没有起点时设置终点无效；已有区间可重新设置起点后再修改终点。
         self.action_mark_ab_end.setVisible(is_video and self.current_ab_start >= 0)
         self.action_mark_ab_delete.setVisible(is_video and current_section_exists)
+        self.action_clear_ab_sections.setVisible(is_video and bool(self.ab_sections))
         self.action_delete_selection.setVisible(self.active_selection_index >= 0 and bool(self.selection_rects))
 
     def get_ab_sections(self):
         """获取AB分区标记"""
         return self.ab_sections
+
+    def mark_ab_start(self):
+        """公开的“设置处理起点”入口，供显式按钮与快捷键共用。"""
+        return self.__handle_mark_for_ab_start()
+
+    def mark_ab_end(self):
+        """公开的“设置处理终点”入口；只在已有待确认起点时成功。"""
+        return self.__handle_mark_for_ab_end()
+
+    def get_pending_ab_start(self):
+        """返回尚未配对终点的起始帧，``None`` 表示当前没有编辑中的区间。"""
+        return self.current_ab_start if self.current_ab_start >= 0 else None
 
     def set_ab_sections(self, sections):
         """设置AB分区标记"""
@@ -1112,9 +1253,12 @@ class VideoDisplayComponent(QWidget):
 
     def clear_ab_sections(self):
         """清除所有AB分区标记"""
+        had_sections = bool(self.ab_sections) or self.current_ab_start >= 0
         self.ab_sections = []
         self.current_ab_start = -1
         self.update_preview_with_rect()
+        if had_sections:
+            self.ab_sections_changed.emit(self.ab_sections)
 
     def closeEvent(self, event):
         """窗口关闭时断开信号连接"""

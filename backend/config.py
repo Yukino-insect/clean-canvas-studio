@@ -29,8 +29,8 @@ PROJECT_UPDATE_URLS = [
 class Config(QConfig):
     """应用持久化配置。
 
-    页面级选项通过 qfluentwidgets 的 ConfigItem 自动保存；任务开始时会把
-    与媒体处理相关的配置复制到任务对象，避免运行中修改设置影响队列快照。
+    页面级选项通过 qfluentwidgets 的 ConfigItem 自动保存；待处理任务会在
+    配置修改时同步其运行快照，而已经开始运行的任务保持启动时的快照不变。
     """
     # 界面语言设置
     intefaceTexts = {
@@ -58,7 +58,9 @@ class Config(QConfig):
     # 用于判断是不是非字幕区域(一般认为字幕文本框的长度是要大于宽度的，如果字幕框的高大于宽，且大于的幅度超过指定像素点大小，则认为是错误检测)
     subtitleYXAxisDifferencePixel = RangeConfigItem("Main", "SubtitleYXAxisDifferencePixel", 10, RangeValidator(0, 300))
     # 用于放大mask大小，防止自动检测的文本框过小，inpaint阶段出现文字边，有残留
-    subtitleAreaDeviationPixel = RangeConfigItem("Main", "SubtitleAreaDeviationPixel", 10, RangeValidator(1, 300))
+    # 允许 0 px，供追求最小静态修复区域的用户关闭扩边；默认 2 px 足以
+    # 覆盖多数抗锯齿边缘，避免旧默认值把大块背景一并交给修复模型。
+    subtitleAreaDeviationPixel = RangeConfigItem("Main", "SubtitleAreaDeviationPixel", 2, RangeValidator(0, 300))
     # 用于判断两个文本框是否为同一行字幕，高度差距指定像素点以内认为是同一行
     subtitleAreaYAxisDifferencePixel = RangeConfigItem("Main", "SubtitleAreaYAxisDifferencePixel", 20, RangeValidator(0, 300))
     # 用于判断两个字幕文本的矩形框是否相似，如果X轴和Y轴偏差都在指定阈值内，则认为时同一个文本框
@@ -95,22 +97,36 @@ class Config(QConfig):
         OptionsValidator(["1", "1.5", "2", "3", "4"]),
     )
 
-    # 精确掩膜：OCR 多边形与视频更新策略。阈值采用百分数，避免浮点配置编辑器
-    # 在不同版本的 QFluentWidgets 中表现不一致。
+    # 最终 mask 由用户明确选择的手工来源构建。视频动态 OCR 是独立的字幕
+    # 定位开关，不属于最终 mask 来源。
     maskMode = OptionsConfigItem(
-        "Mask", "Mode", "ocr_polygon",
-        OptionsValidator(["rectangle", "ocr_polygon", "ocr_refined", "mixed"]),
+        "Mask", "Mode", "rectangle",
+        OptionsValidator(["rectangle", "brush", "color"]),
     )
+    videoDynamicOcr = ConfigItem("Mask", "VideoDynamicOcr", False, BoolValidator())
     videoMaskStrategy = OptionsConfigItem(
-        "Mask", "VideoStrategy", "static",
-        OptionsValidator(["static", "sampled_ocr", "every_frame_ocr"]),
+        "Mask", "VideoStrategy", "sampled_ocr",
+        OptionsValidator(["sampled_ocr", "every_frame_ocr"]),
     )
     ocrPixelThreshold = RangeConfigItem("Mask", "OcrPixelThreshold", 30, RangeValidator(1, 99))
     ocrBoxThreshold = RangeConfigItem("Mask", "OcrBoxThreshold", 60, RangeValidator(1, 99))
-    ocrUnclipRatio = RangeConfigItem("Mask", "OcrUnclipRatio", 120, RangeValidator(50, 300))
-    maskRefineColorThreshold = RangeConfigItem("Mask", "RefineColorThreshold", 22, RangeValidator(1, 128))
-    maskRefineMinArea = RangeConfigItem("Mask", "RefineMinArea", 8, RangeValidator(1, 1000))
+    ocrUnclipRatio = RangeConfigItem("Mask", "OcrUnclipRatio", 120, RangeValidator(1, 500))
+    brushRadius = RangeConfigItem("Mask", "BrushRadius", 12, RangeValidator(1, 100))
+    colorMaskForeground = ConfigItem("Mask", "ColorForeground", "#FFFFFF", ConfigValidator())
+    colorMaskBackground = ConfigItem("Mask", "ColorBackground", "#000000", ConfigValidator())
+    colorMaskTolerance = RangeConfigItem("Mask", "ColorTolerance", 30, RangeValidator(0, 255))
+    # 颜色筛选先精确提取前景像素，再只扩张这些像素以覆盖抗锯齿和描边。
+    # 这不是 ROI 外扩：ROI 仍然只是用户限定的取样范围。
+    colorMaskOutlineExpand = RangeConfigItem("Mask", "ColorOutlineExpand", 1, RangeValidator(0, 32))
     ocrSampleStep = RangeConfigItem("Mask", "OcrSampleStep", 3, RangeValidator(1, 30))
+
+    # 动态 OCR 的文字检测只给出文本行区域。该可选步骤在每个多边形 ROI
+    # 中按颜色提取真实字幕像素；默认关闭以保持既有任务结果完全不变。
+    dynamicOcrRefineMask = ConfigItem("Mask", "DynamicOcrRefineMask", False, BoolValidator())
+    dynamicOcrForeground = ConfigItem("Mask", "DynamicOcrForeground", "#FFFFFF", ConfigValidator())
+    dynamicOcrBackground = ConfigItem("Mask", "DynamicOcrBackground", "#182030", ConfigValidator())
+    dynamicOcrRefineTolerance = RangeConfigItem("Mask", "DynamicOcrRefineTolerance", 55, RangeValidator(0, 255))
+    dynamicOcrOutlineExpand = RangeConfigItem("Mask", "DynamicOcrOutlineExpand", 1, RangeValidator(0, 32))
 
 CONFIG_FILE = 'config/config.json'
 config = Config()

@@ -1,14 +1,13 @@
 # 平台无关的运行时依赖。
 #
-# 此文件刻意不包含 PyTorch。PyTorch 的 CPU/CUDA wheel 属于不同的二进制
-# 构建，分别由 requirements/torch-*.in 和对应的锁文件管理。
+# 此文件刻意不包含 PyTorch 与 PaddlePaddle。二者的 CPU/CUDA wheel 都属于
+# 不同二进制构建，分别由 requirements/torch-*.in、paddle-*.in 和对应锁文件管理。
 filesplit==3.0.2
 opencv-python==4.11.0.86
 tqdm==4.67.1
 pyside6-fluent-widgets==1.7.7
 numpy==2.2.5
 Pillow>=10.0
-paddlepaddle==3.0.0
 paddleocr==3.4.0
 requests
 darkdetect

@@ -24,7 +24,11 @@ def parse_args():
     )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto", help="AI 模式运算设备")
     parser.add_argument("--model-dir", default=None, help="AI 模型缓存目录（可选）")
-    parser.add_argument("--no-ocr", action="store_true", help="禁用自动 OCR；需配合 --manual-area")
+    parser.add_argument("--dynamic-ocr", action="store_true", help="视频中动态检测字幕位置")
+    parser.add_argument(
+        "--ocr-strategy", choices=("sampled_ocr", "every_frame_ocr"), default="sampled_ocr",
+        help="动态 OCR 的检测频率（默认：采样检测）",
+    )
     args = parser.parse_args()
     args.subtitle_area_coords = args.subtitle_area_coords or []
     args.manual_area = args.manual_area or []

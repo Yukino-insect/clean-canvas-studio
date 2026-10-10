@@ -12,9 +12,16 @@ import numpy as np
 
 from backend.enhance.media_enhancer import MediaEnhancer
 from backend.enhance.realesrgan import ANIME_ASSET, RealESRGANEnhancer, _build_rrdb_net, _build_srvgg_net
-from backend.inpaint.engine import InpaintError, InpaintMode, create_inpaint_engine, device_candidates
+from backend.inpaint.engine import (
+    InpaintError,
+    InpaintMode,
+    _finish_ink_on_flat_background,
+    create_inpaint_engine,
+    device_candidates,
+)
 from backend.inpaint.mask import normalize_regions, regions_to_mask
 from backend.main import SubtitleRemover
+from backend.masking import MaskMode, MaskPlan
 from ui.component.enhance_task_list_component import EnhanceTaskListComponent, EnhanceTaskStatus
 from ui.component.task_list_component import TaskListComponent, TaskStatus
 
@@ -57,6 +64,34 @@ class MaskAndEngineTests(unittest.TestCase):
     def test_invalid_mode_is_actionable(self):
         with self.assertRaises(InpaintError):
             create_inpaint_engine("not-a-mode")
+
+    def test_flat_background_postprocess_removes_ink_residue_only_inside_mask(self):
+        """白色气泡中的字形应回填真实底色，不能触碰 mask 外区域。"""
+        source = np.full((40, 50, 3), (238, 241, 244), dtype=np.uint8)
+        source[12:28, 18:21] = (42, 39, 36)
+        source[20:23, 12:28] = (42, 39, 36)
+        mask = np.zeros(source.shape[:2], dtype=np.uint8)
+        mask[12:28, 18:21] = 1
+        mask[20:23, 12:28] = 1
+        model_result = source.copy()
+        model_result[mask.astype(bool)] = (155, 157, 159)  # 模拟 AI 残留的灰色笔画
+
+        result = _finish_ink_on_flat_background(model_result, source, mask)
+
+        self.assertTrue(np.all(result[mask.astype(bool)] == np.array([238, 241, 244])))
+        self.assertTrue(np.array_equal(result[mask == 0], model_result[mask == 0]))
+
+    def test_flat_background_postprocess_keeps_broad_or_textured_masks_for_ai(self):
+        """宽泛涂鸦/纹理背景不应被错误地填成单一颜色。"""
+        source = np.full((48, 48, 3), 230, dtype=np.uint8)
+        source[:, ::4] = (120, 160, 190)  # 采样环是明显纹理，不满足平坦底色条件
+        mask = np.zeros(source.shape[:2], dtype=np.uint8)
+        mask[14:34, 14:34] = 1
+        model_result = np.full_like(source, 99)
+
+        result = _finish_ink_on_flat_background(model_result, source, mask)
+
+        self.assertTrue(np.array_equal(result, model_result))
 
 
 class OutputAndEnhanceRequestTests(unittest.TestCase):
@@ -153,8 +188,10 @@ class OutputAndEnhanceRequestTests(unittest.TestCase):
             self.assertTrue(cv2.imwrite(str(source), image))
             remover = SubtitleRemover(str(source))
             remover.video_out_path = str(output)
-            remover.manual_regions = [(2, 20, 2, 20)]
-            remover.use_ocr_detection = False
+            remover.mask_plan = MaskPlan(
+                mode=MaskMode.RECTANGLE,
+                manual_regions=[(2, 20, 2, 20)],
+            ).to_dict()
             remover.inpaint_mode = InpaintMode.OPENCV.value
             remover.run()
             self.assertTrue(output.is_file())

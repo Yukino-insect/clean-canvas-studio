@@ -95,10 +95,28 @@ class EnhanceQueueUITests(unittest.TestCase):
                 self.assertIn("图片文件", image_args[3])
 
                 page.set_target_media_type("video")
+                self.assertFalse(hasattr(page.setting_interface, "video_note"))
+                self.assertIn("按帧增强并尝试回封装原音频", page.output_text.toPlainText())
+                self.assertIn("可能出现轻微闪烁", page.output_text.toPlainText())
                 page.add_media_tasks()
                 video_args = dialog.call_args.args
                 self.assertIs(video_args[0], page)
                 self.assertIn("视频文件", video_args[3])
+        finally:
+            window.close()
+
+    def test_video_progress_keeps_shared_preview_timeline_visible(self):
+        """增强视频的运行进度应复用内容修复同款时间轴，而不是收到预览即隐藏。"""
+        window = SubtitleExtractorGUI()
+        try:
+            page = window.enhanceInterface
+            page.task_list.add_task("sample.mp4", "realesrgan_anime", 2.0, "cpu")
+            page._active_preview_task_index = 0
+            page.preview_component.set_video_controls_visible(True, frame_count=101, frame_index=0)
+            page._on_progress(0, 50, False)
+            # 本用例无需展示顶层窗口；检查控制栏没有被业务逻辑显式隐藏。
+            self.assertFalse(page.preview_component.control_container.isHidden())
+            self.assertEqual(page.preview_component.video_slider.value(), 51)
         finally:
             window.close()
 

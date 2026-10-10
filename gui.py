@@ -105,7 +105,14 @@ class SubtitleExtractorGUI(FluentWindow):
         self.addSubInterface(self.homeInterface, FluentIcon.BRUSH, tr['SubtitleExtractorGUI']['Workspace'])
         self.addSubInterface(self.enhanceInterface, FluentIcon.PHOTO, "画质增强")
         self.addSubInterface(self.imageFormatInterface, FluentIcon.SAVE_AS, "图片转换")
-        self.addSubInterface(self.advancedSettingInterface, FluentIcon.SETTING, tr['Setting']['AdvancedSetting'], NavigationItemPosition.BOTTOM)
+        # 高级设置属于低频全局操作，放在底部能保持工作台导航的视觉重心。
+        # 页面只在这里注册一次，路由键由 AdvancedSettingInterface 唯一确定。
+        self.addSubInterface(
+            self.advancedSettingInterface,
+            FluentIcon.SETTING,
+            tr['Setting']['AdvancedSetting'],
+            NavigationItemPosition.BOTTOM,
+        )
 
     def on_navigation_item_changed(self, key):
         """导航项变更时的处理函数"""

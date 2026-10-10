@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
-from qfluentwidgets import BodyLabel, CardWidget
+from qfluentwidgets import BodyLabel, CardWidget, HollowHandleStyle
 
 from ui.component.video_display_component import AspectRatioContainer
 
@@ -32,7 +32,11 @@ class MediaPreviewComponent(CardWidget):
         self._show_title = show_title
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        # 无标题预览用于内容工作台。它必须和内容修复的 VideoDisplayComponent
+        # 共享 2px 画布边距；若仍沿用设置卡的 12px 边距，虽然伸缩比例相同，
+        # 画质增强/图片转换的预览 size hint 仍会凭空多出 20px，三页无法对齐。
+        preview_margin = 12 if show_title else 2
+        layout.setContentsMargins(preview_margin, preview_margin, preview_margin, preview_margin)
         layout.setSpacing(8)
         self.title_label = BodyLabel(title, self)
         self.title_label.setStyleSheet("font-size: 18px; font-weight: 600;")
@@ -57,12 +61,29 @@ class MediaPreviewComponent(CardWidget):
         )
         self.aspect_container.setContent(self.display)
         black_layout.addWidget(self.aspect_container)
+        # 与内容修复共用同一套视频时间轴视觉规范：黑底控制栏、紧凑边距与
+        # 白色空心手柄。两页都会将第一帧显示为 1，而不是暴露 OpenCV 的 0-based
+        # 帧下标给用户。
+        self.control_container = QtWidgets.QWidget(self.black_container)
+        control_layout = QtWidgets.QVBoxLayout(self.control_container)
+        control_layout.setContentsMargins(8, 8, 8, 8)
         self.video_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, self.black_container)
-        self.video_slider.setMinimum(0)
-        self.video_slider.setMaximum(0)
-        self.video_slider.setVisible(False)
+        self.video_slider.setRange(1, 1)
+        self.video_slider.setFixedHeight(22)
+        self.video_slider.setStyle(HollowHandleStyle({
+            "handle.color": QtGui.QColor(255, 255, 255),
+            "handle.ring-width": 4,
+            "handle.hollow-radius": 6,
+            "handle.margin": 1,
+        }))
         self.video_slider.valueChanged.connect(self.frame_requested)
-        black_layout.addWidget(self.video_slider)
+        control_layout.addWidget(self.video_slider)
+        self.control_container.setStyleSheet(
+            "background-color: black; border-bottom-left-radius: 8px; "
+            "border-bottom-right-radius: 8px;"
+        )
+        self.control_container.setVisible(False)
+        black_layout.addWidget(self.control_container)
         layout.addWidget(self.black_container, 1)
         self.set_placeholder(placeholder)
 
@@ -77,13 +98,18 @@ class MediaPreviewComponent(CardWidget):
         )
         self.set_video_controls_visible(False)
 
-    def set_video_controls_visible(self, visible: bool, frame_count: int = 0, frame_no: int = 0):
-        """显示视频滑块，并安全约束当前帧到有效范围。"""
+    def set_video_controls_visible(self, visible: bool, frame_count: int = 0, frame_index: int = 0):
+        """显示与内容修复一致的 1-based 视频滑块。
+
+        ``frame_index`` 保持 OpenCV 的 0-based 约定；控件显示时统一加一，避免
+        用户拖到最左端却看到或读取到第二帧。
+        """
+        total = max(1, int(frame_count))
         self.video_slider.blockSignals(True)
-        self.video_slider.setMaximum(max(0, int(frame_count) - 1))
-        self.video_slider.setValue(max(0, min(int(frame_no), self.video_slider.maximum())))
+        self.video_slider.setRange(1, total)
+        self.video_slider.setValue(max(1, min(int(frame_index) + 1, total)))
         self.video_slider.blockSignals(False)
-        self.video_slider.setVisible(visible)
+        self.control_container.setVisible(visible)
 
     def set_frame(self, frame_bgr: np.ndarray, title: str):
         """将 BGR 帧转换为 QPixmap，并根据原始宽高比更新显示容器。"""

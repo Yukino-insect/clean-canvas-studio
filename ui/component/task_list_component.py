@@ -25,15 +25,23 @@ class TaskStatus(Enum):
 class TaskOptions(Enum):
     AB_SECTIONS = "ab_sections"
     SUB_AREAS = "sub_areas"
-    MANUAL_REGIONS = "manual_regions"
-    USE_OCR_DETECTION = "use_ocr_detection"
     OCR_REVIEWED = "ocr_reviewed"
     INPAINT_MODE = "inpaint_mode"
     AI_DEVICE = "ai_device"
     MODEL_DIRECTORY = "model_dir"
     OCR_POLYGONS = "ocr_polygons"
+    BRUSH_STROKES = "brush_strokes"
+    # 每种编辑方式独立保存尚未确认的预选内容；切换方式不会把矩形 ROI
+    # 误带到涂鸦，也不会丢掉用户尚在比较的颜色筛选框。
+    MASK_DRAFTS = "mask_drafts"
     MASK_PLAN = "mask_plan"
     VIDEO_MASK_STRATEGY = "video_mask_strategy"
+    VIDEO_DYNAMIC_OCR = "video_dynamic_ocr"
+    DYNAMIC_OCR_REFINE_MASK = "dynamic_ocr_refine_mask"
+    DYNAMIC_OCR_FOREGROUND = "dynamic_ocr_foreground"
+    DYNAMIC_OCR_BACKGROUND = "dynamic_ocr_background"
+    DYNAMIC_OCR_REFINE_TOLERANCE = "dynamic_ocr_refine_tolerance"
+    DYNAMIC_OCR_OUTLINE_EXPAND = "dynamic_ocr_outline_expand"
 
 @dataclass
 class Task:
@@ -42,6 +50,9 @@ class Task:
     progress: int
     status: TaskStatus
     options: dict
+    # 任务进入处理中时复制的不可变执行快照。页面配置仍可更新其它待处理
+    # 任务，但绝不能影响已经启动的这个任务。
+    execution_options: dict | None = None
     # 用于储存只读的输出路径, 在任务完成后设置
     _output_path: str = None
 
@@ -327,6 +338,7 @@ class TaskListComponent(QWidget):
         if task is None:
             return
         task.output_path = None
+        task.execution_options = None
         self.update_task_progress(index, 0)
         self.update_task_status(index, TaskStatus.PENDING)
         self.task_reset.emit(index)
@@ -353,6 +365,11 @@ class TaskListComponent(QWidget):
             self.current_task_index = index
             self.table.selectRow(index)
             self.table.scrollTo(self.table.model().index(index, 0))
+
+    def clear_current_task(self):
+        """取消当前行选择；用于切换媒体类型后避免旧任务状态留在预览中。"""
+        self.current_task_index = -1
+        self.table.clearSelection()
 
     def get_current_task_index(self):
         """获取当前处理的任务索引

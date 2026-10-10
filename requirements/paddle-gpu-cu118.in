@@ -1,0 +1,4 @@
+# PaddleOCR 的 NVIDIA GPU 运行时 profile（CUDA 11.8 wheel）。
+# PaddlePaddle 官方索引提供该二进制；请勿与 paddlepaddle CPU 包同装。
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu118/
+paddlepaddle-gpu==3.0.0
