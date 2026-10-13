@@ -306,7 +306,13 @@ class EnhanceInterface(QtWidgets.QWidget):
         if last_index >= 0:
             self.task_list.select_task(last_index)
 
-    def set_target_media_type(self, media_type: str):
+    def set_target_media_type(self, media_type: str, *, select_matching_task: bool = True):
+        """切换任务类型，并使预览只绑定同类型的任务。
+
+        任务类型不仅决定文件对话框和时间轴，还决定当前预览的归属。复用内容
+        修复页的规则：优先选中已有的同类型任务；若不存在，则取消任务选择并
+        清空旧预览，不能让图片任务伪装成视频任务的预览。
+        """
         if media_type not in {"image", "video"}:
             raise ValueError(f"不支持的画质增强任务类型：{media_type}")
         changed = media_type != self._target_media_type
@@ -319,16 +325,35 @@ class EnhanceInterface(QtWidgets.QWidget):
             frame_count=100 if media_type == "video" else 0,
             frame_index=0,
         )
-        if not changed:
+        if not changed or not select_matching_task:
             return
+        current_index = self.task_list.get_current_task_index()
+        current_task = self.task_list.get_task(current_index)
+        wants_picture = media_type == "image"
+        if current_task is not None and current_task.is_picture == wants_picture:
+            return
+        matching_index = next(
+            (index for index, task in enumerate(self.task_list.tasks) if task.is_picture == wants_picture),
+            -1,
+        )
+        if matching_index >= 0:
+            self.task_list.select_task(matching_index)
+            return
+
+        # 没有同类型任务时，先释放视频句柄，再取消表格选中状态和像素预览。
+        # ``clear_media_preview`` 特意保留上方刚设置好的视频时间轴占位状态。
+        self._release_preview_capture()
+        self.task_list.clear_current_task()
+        self.preview_component.clear_media_preview()
         if media_type == "image":
-            self.append_log("已切换为图片任务模式。")
+            self.append_log("已切换为图片任务模式；当前没有图片任务，预览已清空。")
         else:
             # 视频限制属于一次性的模式切换事件，而非可配置参数。写入日志既让
             # 用户在需要时能回看，也不长期挤占右侧设置和任务列表空间。
             self.append_log(
                 "已切换为视频任务模式：按帧增强并尝试回封装原音频；"
-                "处理速度更慢，可能出现轻微闪烁。添加文件后可使用帧滑块预览。"
+                "处理速度更慢，可能出现轻微闪烁。当前没有视频任务，预览已清空；"
+                "添加文件后可使用帧滑块预览。"
             )
 
     def _on_task_selected(self, index: int, _path: str):
@@ -336,6 +361,12 @@ class EnhanceInterface(QtWidgets.QWidget):
         task = self.task_list.get_task(index)
         if task is None:
             return
+        # 从队列主动选择任务时，任务真实类型优先于此前“准备添加”的类型。
+        # 这样图片和视频的预览状态不会在同一预览区相互残留。
+        task_media_type = "image" if task.is_picture else "video"
+        if task_media_type != self._target_media_type:
+            self.set_target_media_type(task_media_type, select_matching_task=False)
+            self.append_log(f"已按所选任务切换为{'图片' if task.is_picture else '视频'}增强预览。")
         is_completed = task.status is EnhanceTaskStatus.COMPLETED and bool(task.output_path)
         preview_path = task.output_path if is_completed else task.path
         self._release_preview_capture()

@@ -89,6 +89,15 @@ class MediaPreviewComponent(CardWidget):
 
     def set_placeholder(self, text: str | None = None):
         """清空媒体像素与视频控件；空状态可选择不显示任何提示文字。"""
+        self.clear_media_preview(text)
+        self.set_video_controls_visible(False)
+
+    def clear_media_preview(self, text: str | None = None):
+        """清空媒体像素，但保留当前任务类型决定的时间轴可见状态。
+
+        切换图片/视频任务时，页面可能还没有同类型任务可选；这时必须移除
+        旧媒体画面，同时不能反向覆盖刚由任务类型设置的时间轴状态。
+        """
         self._source_pixmap = None
         self._placeholder = self._placeholder if text is None else text
         self.display.setPixmap(QtGui.QPixmap())
@@ -96,7 +105,6 @@ class MediaPreviewComponent(CardWidget):
         self.display.setStyleSheet(
             "background-color: black; color: #9aa3ad; border-top-left-radius: 10px; border-top-right-radius: 10px;"
         )
-        self.set_video_controls_visible(False)
 
     def set_video_controls_visible(self, visible: bool, frame_count: int = 0, frame_index: int = 0):
         """显示与内容修复一致的 1-based 视频滑块。

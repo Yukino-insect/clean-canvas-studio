@@ -400,6 +400,45 @@ class MediaTypeAdaptationTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_enhance_switches_to_matching_task_or_clears_stale_preview(self):
+        """增强页切换类型时不能把图片预览遗留给视频任务。"""
+        window = SubtitleExtractorGUI()
+        try:
+            window.show()
+            window.switchTo(window.enhanceInterface)
+            QTest.qWait(80)
+            page = window.enhanceInterface
+            with tempfile.TemporaryDirectory() as directory:
+                image = Path(directory) / "source.png"
+                cv2.imencode(".png", np.full((80, 40, 3), 160, dtype=np.uint8))[1].tofile(image)
+                video = Path(directory) / "source.avi"
+                self._create_video(video)
+                image_index = page.task_list.add_task(str(image), "realesrgan_anime", 2.0, "cpu")
+                video_index = page.task_list.add_task(str(video), "realesrgan_anime", 2.0, "cpu")
+
+                page.task_list.select_task(image_index)
+                self.app.processEvents()
+                self.assertIsNotNone(page.preview_component._source_pixmap)
+
+                page.set_target_media_type("video")
+                self.app.processEvents()
+                self.assertEqual(page.task_list.get_current_task_index(), video_index)
+                self.assertEqual(page._target_media_type, "video")
+                self.assertTrue(page.preview_component.video_slider.isVisible())
+                self.assertEqual(page.preview_component.video_slider.maximum(), 3)
+
+                # 移除唯一视频任务后再次切换类型，图片预览必须被明确清空。
+                page.task_list.delete_task(video_index)
+                page.set_target_media_type("image")
+                page.set_target_media_type("video")
+                self.app.processEvents()
+                self.assertEqual(page.task_list.get_current_task_index(), -1)
+                self.assertIsNone(page.preview_component._source_pixmap)
+                self.assertEqual(page.preview_component.display.text(), "")
+                page._release_preview_capture()
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

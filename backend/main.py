@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+# 将指定目录动态添加到 Python 的模块搜索路径的最前端
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -225,14 +226,11 @@ class SubtitleRemover:
         return repaired
 
     def _effective_dynamic_ocr_strategy(self) -> VideoMaskStrategy:
-        """Return a safe dynamic OCR strategy and reject stale refine snapshots.
+        """返回一个安全的动态 OCR 策略，并拒绝陈旧的精细化（refine）快照。
 
-        Pixel refinement derives a glyph mask from each *current* frame.  A
-        sampled OCR map intentionally reuses detections between sample frames,
-        therefore a stale task/configuration containing both options must never
-        silently apply refinement while sampling.  The main UI prevents this
-        combination; this runtime guard also protects old task snapshots, CLI
-        integrations and future callers that bypass the UI.
+        像素精细化会从每个当前帧中推导出一个字形掩码（glyph mask）。而采样的 OCR 映射
+        则有意在采样帧之间重用检测结果，因此，包含这两种选项的陈旧任务/配置绝不能在采样时静默应用精细化。
+        主界面会阻止这种组合；此运行时防护机制还可以保护旧的任务快照、CLI 集成以及绕过界面的未来调用者。
         """
         strategy = VideoMaskStrategy(self.video_mask_strategy)
         if strategy is VideoMaskStrategy.SAMPLED_OCR and self.dynamic_ocr_refine_mask:

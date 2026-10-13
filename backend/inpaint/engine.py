@@ -1,7 +1,6 @@
 """统一的本地图片修复引擎。
 
-本模块刻意只包含掩膜修复所需的薄封装，而不是嵌入 IOPaint 的 Web/
-Diffusion 全套依赖。LaMa、Anime-LaMa 与 Manga 的输入约定及预处理方式
+本模块刻意只包含掩膜修复所需的薄封装。LaMa、Anime-LaMa 与 Manga 的输入约定及预处理方式
 参考 IOPaint（Apache-2.0）：RGB uint8 图像 + 白色掩膜，输出 BGR uint8。
 """
 

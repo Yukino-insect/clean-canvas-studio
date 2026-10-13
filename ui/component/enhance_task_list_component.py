@@ -123,6 +123,15 @@ class EnhanceTaskListComponent(QWidget):
         self.table.scrollTo(self.table.model().index(index, 0))
         self.task_selected.emit(index, self.tasks[index].path)
 
+    def clear_current_task(self):
+        """取消当前行选择，避免切换任务类型后旧媒体继续占用预览。"""
+        self.current_task_index = -1
+        self.table.clearSelection()
+
+    def get_current_task_index(self):
+        """返回当前选中任务的索引；无选中任务时返回 ``-1``。"""
+        return self.current_task_index
+
     def update_task_progress(self, index: int, progress: int):
         task = self.get_task(index)
         if task is None:
