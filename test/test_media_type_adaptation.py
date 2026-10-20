@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gui import SubtitleExtractorGUI
+from gui import CleanCanvasWindow
 from backend.config import config
 from backend.masking import MaskPlan, build_mask
 from ui.home_interface import HomeInterface
@@ -44,7 +44,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
         config.set(config.videoDynamicOcr, False)
         config.set(config.dynamicOcrRefineMask, False)
         config.set(config.videoMaskStrategy, "every_frame_ocr")
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.resize(1360, 720)
             window.show()
@@ -144,7 +144,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
             config.set(config.videoDynamicOcr, True)
             config.set(config.videoMaskStrategy, "every_frame_ocr")
             config.set(config.dynamicOcrRefineMask, False)
-            window = SubtitleExtractorGUI()
+            window = CleanCanvasWindow()
             window.show()
             self.app.processEvents()
             home = window.homeInterface
@@ -168,7 +168,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
 
     def test_confirm_empty_regions_uses_existing_component_api_without_crashing(self):
         """OCR 没有候选框时，确认动作应提示用户，而不是访问不存在的接口。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             home = window.homeInterface
             home.task_list_component.add_task("placeholder.png")
@@ -182,7 +182,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
     def test_editing_mask_is_not_presented_as_confirmed_and_image_hides_ab_actions(self):
         """红色只表示已确认最终 mask；图片模式没有 A/B 起点菜单。"""
         previous_mode = config.maskMode.value
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             home = window.homeInterface
             home.task_list_component.add_task("placeholder.png")
@@ -214,7 +214,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
         """图片草稿只能随图片任务恢复，切换到视频绝不能残留在预览上。"""
         previous_mode = config.maskMode.value
         config.set(config.maskMode, "rectangle")
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             home = window.homeInterface
             with tempfile.TemporaryDirectory() as directory:
@@ -249,7 +249,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
 
     def test_video_range_controls_create_closed_interval_and_can_clear(self):
         """处理区间需有显式起点、终点；反向选择也应得到合法的闭区间。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             home = window.homeInterface
             component = home.video_display_component
@@ -281,7 +281,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
         config.set(config.colorMaskForeground, "#000000")
         config.set(config.colorMaskBackground, "#FFFFFF")
         config.set(config.colorMaskTolerance, 8)
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             home = window.homeInterface
             with tempfile.TemporaryDirectory() as directory:
@@ -313,7 +313,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
 
     def test_content_repair_no_longer_exposes_ocr_candidate_button(self):
         previous_mode = config.maskMode.value
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.show()
             self.app.processEvents()
@@ -341,7 +341,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
 
     def test_advanced_settings_group_parameters_by_scope_and_expose_help(self):
         """高级页不应再把历史字幕参数伪装成当前流程仍会生效的配置。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             advanced = window.advancedSettingInterface
             home = window.homeInterface
@@ -363,7 +363,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
             window.close()
 
     def test_enhance_media_type_switch_and_video_slider(self):
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.resize(1360, 720)
             window.show()
@@ -402,7 +402,7 @@ class MediaTypeAdaptationTests(unittest.TestCase):
 
     def test_enhance_switches_to_matching_task_or_clears_stale_preview(self):
         """增强页切换类型时不能把图片预览遗留给视频任务。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.show()
             window.switchTo(window.enhanceInterface)

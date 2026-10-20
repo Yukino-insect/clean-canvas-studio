@@ -41,7 +41,7 @@ flowchart LR
 
 ### 它做什么
 
-项目在 [backend/tools/subtitle_detect.py](../backend/tools/subtitle_detect.py) 中使用 PaddleOCR 的 `TextDetection`，当前配置模型为 `PP-OCRv5_server_det`。它只做**文字位置检测**，不做文字识别、翻译或语义理解。
+项目在 [backend/tools/text_region_detector.py](../backend/tools/text_region_detector.py) 中使用 PaddleOCR 的 `TextDetection`，当前配置模型为 `PP-OCRv5_server_det`。它只做**文字位置检测**，不做文字识别、翻译或语义理解。
 
 模型输出的重点是：
 
@@ -160,7 +160,7 @@ LaMa、Anime-LaMa、Manga 和 Real-ESRGAN 使用 PyTorch。选择“自动”时
 
 ### 缓存与完整性
 
-AI 权重由 `ModelStore` 统一管理。模型文件先下载到临时文件，MD5 校验通过后再原子替换到正式缓存位置，避免断网后把半个文件当作可用模型。默认缓存目录为 `backend/models/ai`，也可通过高级设置或环境变量 `VSR_MODEL_DIR` 改写。
+AI 权重由 `ModelStore` 统一管理。模型文件先下载到临时文件，MD5 校验通过后再原子替换到正式缓存位置，避免断网后把半个文件当作可用模型。默认缓存目录为 `backend/models/ai`，也可通过高级设置或环境变量 `CLEAN_CANVAS_MODEL_DIR` 改写。
 
 ## 9. 建议学习路径
 
@@ -170,7 +170,7 @@ AI 权重由 `ModelStore` 统一管理。模型文件先下载到临时文件，
 
 ### 第二步：OCR 多边形与掩膜计划
 
-阅读 [backend/tools/subtitle_detect.py](../backend/tools/subtitle_detect.py) 和 [backend/masking.py](../backend/masking.py)。重点理解：候选 ROI、`dt_polys`、`OcrPolygon`、`MaskPlan` 和最终红色掩膜不是同一个概念。
+阅读 [backend/tools/text_region_detector.py](../backend/tools/text_region_detector.py) 和 [backend/masking.py](../backend/masking.py)。重点理解：候选 ROI、`dt_polys`、`OcrPolygon`、`MaskPlan` 和最终红色掩膜不是同一个概念。
 
 ### 第三步：TorchScript 修复模型
 

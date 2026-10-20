@@ -2,7 +2,7 @@
 
 本文描述当前代码实际执行的图像/视频处理链路，面向维护者、需要排障的高级用户和二次开发者。它不是模型宣传页：文中区分了“用户看到的预选框”“最终二值 mask”“模型真正收到的张量”，也明确列出会导致结果看似反常的边界条件。
 
-适用版本以仓库中的 `backend/masking.py`、`backend/main.py`、`backend/inpaint/engine.py`、`backend/tools/subtitle_detect.py` 和 `backend/enhance/` 为准；界面配置以 `backend/config.py` 为准。
+适用版本以仓库中的 `backend/masking.py`、`backend/main.py`、`backend/inpaint/engine.py`、`backend/tools/text_region_detector.py` 和 `backend/enhance/` 为准；界面配置以 `backend/config.py` 为准。
 
 ## 1. 一句话总览
 
@@ -58,7 +58,7 @@ flowchart LR
 | [backend/inpaint/engine.py](../backend/inpaint/engine.py) | 修复引擎枚举、模型下载校验、LaMa/Anime-LaMa/Manga 推理、mask 外保护 | BGR 图、二值 mask、模型权重 | 修复后的 BGR 图 |
 | [backend/inpaint/opencv_inpaint.py](../backend/inpaint/opencv_inpaint.py) | Telea 适配器 | BGR 图、mask | Telea 修复结果 |
 | [backend/main.py](../backend/main.py) | 图片/视频修复编排、每帧 mask、引擎缓存、A/B 区间、预览与输出 | 任务快照、图片或视频帧 | 图片文件或逐帧编码的视频 |
-| [backend/tools/subtitle_detect.py](../backend/tools/subtitle_detect.py) | PaddleOCR GPU 优先/CPU 回退、`dt_polys` 解析、采样/逐帧动态 OCR | 完整帧、OCR 配置、可选检测 ROI | `OcrPolygon` 列表、帧号到多边形映射 |
+| [backend/tools/text_region_detector.py](../backend/tools/text_region_detector.py) | PaddleOCR GPU 优先/CPU 回退、`dt_polys` 解析、采样/逐帧动态 OCR | 完整帧、OCR 配置、可选检测 ROI | `OcrPolygon` 列表、帧号到多边形映射 |
 | [backend/enhance/realesrgan.py](../backend/enhance/realesrgan.py) | Real-ESRGAN 权重加载、设备回退、RGB 张量、tile 推理与缩放 | 完整 BGR 图、倍率 | 放大后的 BGR 图 |
 | [backend/enhance/media_enhancer.py](../backend/enhance/media_enhancer.py) | 图片/视频增强任务、进度、预览节流、音频回封装 | 文件、增强任务快照 | PNG 或 MP4 输出 |
 | [backend/tools/video_io.py](../backend/tools/video_io.py) | 视频帧预取与 FFmpeg 原始帧编码 | BGR 帧、FPS、尺寸 | H.264/yuv420p 视频流 |
@@ -172,7 +172,7 @@ Manga 路径在推理前执行 `BGR → GRAY`，以灰度和 Erika 线稿作为�
 
 ## 6. OCR：设备、参数与失败回退
 
-`SubtitleDetect` 创建 PaddleOCR `TextDetection` 时先用 `gpu:0` 完整初始化。GPU wheel、CUDA runtime、驱动、显存或模型初始化任一环节失败时，会重新创建等价的 CPU 检测器；如果首次推理阶段才失败，也会以 CPU 重建并重试当前帧一次。它与 PyTorch 的 AI 设备设置独立。
+`TextRegionDetector` 创建 PaddleOCR `TextDetection` 时先用 `gpu:0` 完整初始化。GPU wheel、CUDA runtime、驱动、显存或模型初始化任一环节失败时，会重新创建等价的 CPU 检测器；如果首次推理阶段才失败，也会以 CPU 重建并重试当前帧一次。它与 PyTorch 的 AI 设备设置独立。
 
 | 配置 | 实际传给 OCR | 调大后的常见影响 | 需要警惕 |
 | --- | --- | --- | --- |
@@ -181,7 +181,7 @@ Manga 路径在推理前执行 `BGR → GRAY`，以灰度和 Erika 线稿作为�
 | OCR 轮廓外扩比例 | `unclip_ratio = value / 100` | 候选多边形更大、更容易包描边 | 过大将背景交给修复器 |
 | 动态 OCR 采样间隔 | `ocrSampleStep` | 数值越大，定位越快 | 快速移动字幕、切镜、闪烁字更易错位 |
 
-OCR 的 ROI（`sub_areas`）当前用于**检测结果过滤**：先检测整帧，再只保留中心点或任一顶点位于 ROI 的多边形；它不是向 PaddleOCR 传入裁剪图。因此若性能成为问题，未来可把“预裁剪检测并坐标映射回全图”作为独立优化，但不能悄悄改变当前坐标和检测语义。
+OCR 的 ROI（`ocr_regions`）当前用于**检测结果过滤**：先检测整帧，再只保留中心点或任一顶点位于 ROI 的多边形；它不是向 PaddleOCR 传入裁剪图。因此若性能成为问题，未来可把“预裁剪检测并坐标映射回全图”作为独立优化，但不能悄悄改变当前坐标和检测语义。
 
 ## 7. 画质增强（Real-ESRGAN）
 

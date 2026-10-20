@@ -8,8 +8,8 @@ from qpt.kernel.qinterpreter import PYPI_PIP_SOURCE
 def main():
     WORK_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     LAUNCH_PATH = os.path.join(WORK_DIR, 'gui.py')
-    SAVE_PATH = os.path.join(os.path.dirname(WORK_DIR), 'vsr_out')
-    ICON_PATH = os.path.join(WORK_DIR, "design", "vsr.ico")
+    SAVE_PATH = os.path.join(os.path.dirname(WORK_DIR), 'clean_canvas_dist')
+    ICON_PATH = os.path.join(WORK_DIR, "design", "clean-canvas.ico")
 
     if os.getenv("QPT_Action") == "True":
         set_default_pip_source(PYPI_PIP_SOURCE)

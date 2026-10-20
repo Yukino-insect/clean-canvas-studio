@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gui import SubtitleExtractorGUI
+from gui import CleanCanvasWindow
 from ui.image_format_interface import ImageFormatInterface
 
 
@@ -45,7 +45,7 @@ class ImageFormatInterfaceTests(unittest.TestCase):
                 self.assertTrue({(16, 16), (32, 32), (64, 64)}.issubset(converted_icon.info.get("sizes", set())))
 
     def test_new_page_toggles_quality_and_ico_options(self):
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             page = window.imageFormatInterface
             window.show()
@@ -82,7 +82,7 @@ class ImageFormatInterfaceTests(unittest.TestCase):
             window.close()
 
     def test_ctrl_c_no_longer_closes_main_window(self):
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.show()
             QTest.keyClick(window, Qt.Key_C, Qt.ControlModifier)

@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gui import SubtitleExtractorGUI
+from gui import CleanCanvasWindow
 
 
 class NavigationLayoutTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class NavigationLayoutTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_inline_navigation_toggle_keeps_window_size_and_preview_aspect_ratio(self):
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.resize(1280, 800)
             window.show()
@@ -117,7 +117,7 @@ class NavigationLayoutTests(unittest.TestCase):
 
     def test_all_workbenches_share_preview_and_log_vertical_allocation(self):
         """内容修复、增强、转换不能因布局 stretch 漏配而出现不同预览高度。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             # 只有窗口高于 16:9 画布所需高度时，内容修复内部错误的 Center
             # 对齐才会暴露；使用较高窗口以验证黑色画布而非外层占位的真实高度。

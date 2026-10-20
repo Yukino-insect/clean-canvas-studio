@@ -26,7 +26,7 @@ from ui.icon.my_fluent_icon import MyFluentIcon
 from backend.config import config, tr
 from backend.masking import MaskMode, MaskPlan, OcrPolygon, build_mask
 from ui.component.color_palette_dialog import ColorPaletteDialog
-from backend.tools.subtitle_remover_remote_call import SubtitleRemoverRemoteCall
+from backend.tools.content_repair_message_bridge import ContentRepairMessageBridge
 from backend.tools.process_manager import ProcessManager
 from backend.tools.common_tools import get_readable_path, is_image_file, read_image
 
@@ -56,9 +56,9 @@ def detect_ocr_in_process(result_queue, task_path, frame):
             # 优先级属于体验优化；系统拒绝调整时仍应正常完成检测。
             pass
 
-        from backend.tools.subtitle_detect import SubtitleDetect
+        from backend.tools.text_region_detector import TextRegionDetector
 
-        polygons = SubtitleDetect(task_path, []).detect_polygons(frame)
+        polygons = TextRegionDetector(task_path, []).detect_polygons(frame)
         result_queue.put({
             "polygons": [polygon.to_dict() for polygon in polygons],
             "error": None,
@@ -74,7 +74,7 @@ def detect_ocr_in_process(result_queue, task_path, frame):
 class _ProcessLogWriter:
     """把子进程的 stdout/stderr 按行转发到内容修复日志板。
 
-    第三方库直接 ``print`` 的警告不会经过 ``SubtitleRemover.append_output``。
+    第三方库直接 ``print`` 的警告不会经过 ``ContentRepairProcessor.append_output``。
     这些输出若只留在启动控制台，用户既无法判断初始化是否仍在进行，也无法
     得知真正的失败原因。tqdm 的回车式进度条由独立的百分比控件负责，因此
     不重复转发，避免每帧淹没日志板。
@@ -88,20 +88,20 @@ class _ProcessLogWriter:
         text = str(text)
         if not text:
             return 0
-        if "\r" in text and "Subtitle Removing:" in text:
+        if "\r" in text and "Content Repair:" in text:
             return len(text)
         self._buffer += text
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
             line = line.strip()
             if line:
-                SubtitleRemoverRemoteCall.remote_call_append_log(self.queue, [line])
+                ContentRepairMessageBridge.remote_call_append_log(self.queue, [line])
         return len(text)
 
     def flush(self):
         line, self._buffer = self._buffer.strip(), ""
-        if line and "Subtitle Removing:" not in line:
-            SubtitleRemoverRemoteCall.remote_call_append_log(self.queue, [line])
+        if line and "Content Repair:" not in line:
+            ContentRepairMessageBridge.remote_call_append_log(self.queue, [line])
 
 
 class HomeInterface(QWidget):
@@ -222,7 +222,7 @@ class HomeInterface(QWidget):
         # MaskPlan，运行任务时必须坚持该冻结快照，不能因随后改设置而变形。
         config.maskMode.valueChanged.connect(self._switch_mask_editor)
         for config_item in (
-            config.subtitleAreaDeviationPixel, config.brushRadius,
+            config.ocrMaskPadding, config.brushRadius,
             config.colorMaskForeground, config.colorMaskBackground, config.colorMaskTolerance,
             config.colorMaskOutlineExpand,
         ):
@@ -409,11 +409,11 @@ class HomeInterface(QWidget):
         button_layout.setContentsMargins(16, 16, 16, 16)
         button_layout.setSpacing(8)
 
-        self.file_button = PushButton(tr['SubtitleExtractorGUI']['Open'], self)
+        self.file_button = PushButton(tr['CleanCanvasWindow']['Open'], self)
         self.file_button.setIcon(FluentIcon.FOLDER)
         self.file_button.clicked.connect(self.open_file)
 
-        self.run_button = PushButton(tr['SubtitleExtractorGUI']['Run'], self)
+        self.run_button = PushButton(tr['CleanCanvasWindow']['Run'], self)
         self.run_button.setIcon(FluentIcon.PLAY)
         self.run_button.setToolTip(
             "启动当前页面的整个内容修复队列：仅已确认修复区域的待处理任务会按顺序逐项执行。"
@@ -421,7 +421,7 @@ class HomeInterface(QWidget):
         )
         self.run_button.clicked.connect(self.run_button_clicked)
 
-        self.stop_button = PushButton(tr['SubtitleExtractorGUI']['Stop'], self)
+        self.stop_button = PushButton(tr['CleanCanvasWindow']['Stop'], self)
         self.stop_button.setIcon(MyFluentIcon.Stop)
         self.stop_button.setToolTip(
             "停止当前内容修复队列：会终止正在执行的任务；尚未开始的任务保留为待处理，"
@@ -709,7 +709,7 @@ class HomeInterface(QWidget):
         get_current_task_index = self.task_list_component.get_current_task_index()
         if get_current_task_index == -1:
             return
-        self.task_list_component.update_task_option(get_current_task_index, TaskOptions.SUB_AREAS, selections)
+        self.task_list_component.update_task_option(get_current_task_index, TaskOptions.OCR_REGIONS, selections)
         mode = self._current_mask_mode()
         if mode in {MaskMode.RECTANGLE, MaskMode.COLOR}:
             drafts = self._mask_drafts(get_current_task_index)
@@ -1033,7 +1033,7 @@ class HomeInterface(QWidget):
             # 检测期间允许切换任务，结果不能因为用户正常操作而白白丢弃。
             # 不修改当前预览的选框，只持久化到发起检测的任务，待用户返回时再加载。
             if self.task_list_component.get_task(task_index) is not None:
-                self.task_list_component.update_task_option(task_index, TaskOptions.SUB_AREAS, [])
+                self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REGIONS, [])
                 self.task_list_component.update_task_option(task_index, TaskOptions.OCR_POLYGONS, [polygon.to_dict() for polygon in polygons])
                 drafts = self._mask_drafts(task_index)
                 drafts[self._current_mask_mode().value] = {"regions": []}
@@ -1045,7 +1045,7 @@ class HomeInterface(QWidget):
         self._applying_ocr_result = True
         try:
             self.video_display_component.set_selection_rects(preview_regions)
-            self.task_list_component.update_task_option(task_index, TaskOptions.SUB_AREAS, preview_regions)
+            self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REGIONS, preview_regions)
             self.task_list_component.update_task_option(task_index, TaskOptions.OCR_POLYGONS, [polygon.to_dict() for polygon in polygons])
             drafts = self._mask_drafts(task_index)
             drafts[self._current_mask_mode().value] = {"regions": [tuple(region) for region in preview_regions]}
@@ -1083,7 +1083,7 @@ class HomeInterface(QWidget):
             color_background=config.colorMaskBackground.value,
             color_tolerance=config.colorMaskTolerance.value,
             color_outline_expand_pixels=config.colorMaskOutlineExpand.value,
-            expand_pixels=config.subtitleAreaDeviationPixel.value,
+            expand_pixels=config.ocrMaskPadding.value,
         )
 
     def _show_mask_preview(
@@ -1156,7 +1156,7 @@ class HomeInterface(QWidget):
             plan.color_tolerance = source_plan.color_tolerance
             plan.color_outline_expand_pixels = source_plan.color_outline_expand_pixels
 
-        self.task_list_component.update_task_option(task_index, TaskOptions.SUB_AREAS, preview_regions)
+        self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REGIONS, preview_regions)
         self.task_list_component.update_task_option(task_index, TaskOptions.BRUSH_STROKES, source_plan.brush_strokes)
         self.task_list_component.update_task_option(task_index, TaskOptions.MASK_PLAN, plan.to_dict())
         self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REVIEWED, bool(plan.source_modes))
@@ -1195,7 +1195,7 @@ class HomeInterface(QWidget):
         else:
             drafts[mode.value] = {"regions": []}
             self.video_display_component.clear_selections()
-            self.task_list_component.update_task_option(task_index, TaskOptions.SUB_AREAS, [])
+            self.task_list_component.update_task_option(task_index, TaskOptions.OCR_REGIONS, [])
         self._save_mask_drafts(task_index, drafts)
 
     def clear_current_regions(self):
@@ -1258,7 +1258,7 @@ class HomeInterface(QWidget):
         # 兼容升级前的任务：将旧的单一选框/涂鸦迁入当前方式的草稿，再由
         # 新的组合计划继续管理。不会改写已确认的历史 MaskPlan。
         if not drafts:
-            legacy_regions = self.task_list_component.get_task_option(index, TaskOptions.SUB_AREAS, [])
+            legacy_regions = self.task_list_component.get_task_option(index, TaskOptions.OCR_REGIONS, [])
             if legacy_regions:
                 drafts[self._current_mask_mode().value] = {"regions": legacy_regions}
             legacy_strokes = self.task_list_component.get_task_option(index, TaskOptions.BRUSH_STROKES, [])
@@ -1396,7 +1396,7 @@ class HomeInterface(QWidget):
             return
         # 如果任务队列为空
         if not self.task_list_component.get_pending_tasks():
-            self.append_output(tr['SubtitleExtractorGUI']['OpenVideoFirst'])
+            self.append_output(tr['CleanCanvasWindow']['OpenVideoFirst'])
             return
 
         # OCR 的角色是辅助定位而非不可见的后台黑盒。每个任务必须先经过用户
@@ -1494,7 +1494,7 @@ class HomeInterface(QWidget):
                             # 更新当前处理的任务索引
                             self.current_processing_task_index = task_index
                             if not self.load_video(task_item.path): # 如果加载视频失败
-                                self.append_log_signal.emit([tr['SubtitleExtractorGUI']['OpenVideoFailed'].format(task_item.path)])
+                                self.append_log_signal.emit([tr['CleanCanvasWindow']['OpenVideoFailed'].format(task_item.path)])
                                 self.task_status_signal.emit(task_index, TaskStatus.FAILED)
                                 continue
 
@@ -1514,13 +1514,13 @@ class HomeInterface(QWidget):
                             self.task_status_signal.emit(task_index, TaskStatus.PROCESSING)
                             for key in options:
                                 value = options[key]
-                                if key == TaskOptions.SUB_AREAS.value:
+                                if key == TaskOptions.OCR_REGIONS.value:
                                     value = self.video_display_component.preview_coordinates_to_video_coordinates(value)
                                 options[key] = value
                             # 清理缓存, 使用动态路径
                             task_item.output_path = None
                             output_path = task_item.output_path
-                            process = self.run_subtitle_remover_process(
+                            process = self.run_content_repair_process(
                                 task_item.path,
                                 output_path,
                                 options,
@@ -1567,74 +1567,72 @@ class HomeInterface(QWidget):
             self.toggle_buttons_signal.emit(True)
 
     @staticmethod
-    def remover_process(queue, video_path, output_path, options):
-        """
-        在子进程中执行字幕提取的函数
+    def content_repair_process(queue, media_path, output_path, options):
+        """在子进程中执行一个独立的内容修复任务。
 
         Args:
-            video_path: 视频文件路径
-            output_path: 输出文件路径
-            options: 选项
+            media_path: 输入图片或视频文件路径。
+            output_path: 输出文件路径。
+            options: 冻结后的任务选项。
         """
-        sr = None
+        repair_processor = None
         process_log = _ProcessLogWriter(queue)
         try:
             # 模型框架会把加载警告和初始化错误直接写到 stdout/stderr；统一接入
             # 进程消息桥后，GUI 日志板与控制台可以看到相同的诊断信息。
             with redirect_stdout(process_log), redirect_stderr(process_log):
-                from backend.main import SubtitleRemover
-                sr = SubtitleRemover(video_path, True)
-                sr.video_out_path = output_path
+                from backend.main import ContentRepairProcessor
+                repair_processor = ContentRepairProcessor(media_path, True)
+                repair_processor.output_path = output_path
                 for key in options:
-                    setattr(sr, key, options[key])
-                sr.add_progress_listener(
-                    lambda progress, isFinished: SubtitleRemoverRemoteCall.remote_call_update_progress(
+                    setattr(repair_processor, key, options[key])
+                repair_processor.add_progress_listener(
+                    lambda progress, isFinished: ContentRepairMessageBridge.remote_call_update_progress(
                         queue, progress, isFinished
                     )
                 )
-                sr.append_output = lambda *args: SubtitleRemoverRemoteCall.remote_call_append_log(queue, list(args))
-                sr.manage_process = lambda pid: SubtitleRemoverRemoteCall.remote_call_manage_process(queue, pid)
-                sr.update_preview_with_comp = lambda *args: SubtitleRemoverRemoteCall.remote_call_update_preview_with_comp(queue, args)
-                sr.run()
+                repair_processor.append_output = lambda *args: ContentRepairMessageBridge.remote_call_append_log(queue, list(args))
+                repair_processor.manage_process = lambda pid: ContentRepairMessageBridge.remote_call_manage_process(queue, pid)
+                repair_processor.update_preview_with_comp = lambda *args: ContentRepairMessageBridge.remote_call_update_preview_with_comp(queue, args)
+                repair_processor.run()
         except Exception as e:
             # 保留子进程完整堆栈到 GUI 日志；仅显示异常字符串不足以定位模型、
             # 文件或编码阶段的实际失败位置。
             process_log.write(traceback.format_exc())
             process_log.flush()
-            SubtitleRemoverRemoteCall.remote_call_catch_error(queue, e)
+            ContentRepairMessageBridge.remote_call_catch_error(queue, e)
             # The parent process uses the exit code as the authoritative result.
             # Re-raise after reporting the actionable error so a failed repair
             # can never be promoted to COMPLETED by a stale queued UI status.
             raise
         finally:
             process_log.flush()
-            if sr:
-                sr.isFinished = True
-                sr.vsf_running = False
-            SubtitleRemoverRemoteCall.remote_call_finish(queue)
+            if repair_processor:
+                repair_processor.isFinished = True
+                repair_processor.vsf_running = False
+            ContentRepairMessageBridge.remote_call_finish(queue)
 
-    def run_subtitle_remover_process(self, video_path, output_path, options, task_index):
-        """
-        使用多进程执行字幕提取，并等待进程完成
+    def run_content_repair_process(self, media_path, output_path, options, task_index):
+        """使用子进程执行内容修复，并在消息耗尽后安全回收通信桥。
 
         Args:
-            video_path: 视频文件路径
-            output_path: 输出文件路径
-            options: 任务选项
-            task_index: 当前队列任务的稳定索引
+            media_path: 输入图片或视频文件路径。
+            output_path: 输出文件路径。
+            options: 冻结后的任务选项。
+            task_index: 当前队列任务的稳定索引。
         """
-        subtitle_remover_remote_caller = SubtitleRemoverRemoteCall()
-        subtitle_remover_remote_caller.register_update_progress_callback(
+        message_bridge = ContentRepairMessageBridge()
+        message_bridge.register_update_progress_callback(
             lambda progress, finished: self.progress_signal.emit(task_index, progress, finished)
         )
-        subtitle_remover_remote_caller.register_log_callback(self.append_log_signal.emit)
-        subtitle_remover_remote_caller.register_update_preview_with_comp_callback(self.update_preview_with_comp_signal.emit)
-        subtitle_remover_remote_caller.register_error_callback(
+        message_bridge.register_log_callback(self.append_log_signal.emit)
+        message_bridge.register_update_preview_with_comp_callback(self.update_preview_with_comp_signal.emit)
+        message_bridge.register_error_callback(
             lambda error: self.task_error_signal.emit(task_index, error)
         )
         process = multiprocessing.Process(
-            target=HomeInterface.remover_process,
-            args=(subtitle_remover_remote_caller.queue, video_path, output_path, options)
+            target=HomeInterface.content_repair_process,
+            args=(message_bridge.queue, media_path, output_path, options)
         )
         process_started = False
         try:
@@ -1650,14 +1648,14 @@ class HomeInterface(QWidget):
             if not process_started:
                 # 进程尚未启动时没有发送方能够投递 FINISH；直接唤醒并回收本地
                 # 消费线程，避免启动失败或提前取消时进行无意义的等待。
-                subtitle_remover_remote_caller.stop()
+                message_bridge.stop()
             else:
                 # 子进程在 finally 中把 FINISH 放在所有进度/日志/预览消息之后。
                 # 必须等消费者读到这个哨兵，不能在 process.join() 后立即 stop；
                 # 后一种做法会丢弃队列尾部的进度事件，使任务停在启动时的 1%。
                 wait_timeout = 0.5 if self._stop_event.is_set() else 15
-                if not subtitle_remover_remote_caller.wait_for_finish(timeout=wait_timeout):
-                    subtitle_remover_remote_caller.stop()
+                if not message_bridge.wait_for_finish(timeout=wait_timeout):
+                    message_bridge.stop()
         return process
 
     @Slot()
@@ -1735,15 +1733,15 @@ class HomeInterface(QWidget):
     def update_preview_with_comp(self, args):
         """更新执行时预览"""
         # frame_ori 原始视频帧
-        # frame_comp 经过处理后的帧，通常是去字幕、修复之后的结果
+        # frame_comp 是内容修复后得到的帧。
         frame_ori, frame_comp = args
         if self.current_processing_task_index >= 0:
-            subtitle_areas = self.task_list_component.get_task_option(self.current_processing_task_index, TaskOptions.SUB_AREAS, [])
-            if len(subtitle_areas) > 0:
-                subtitle_areas = self.video_display_component.preview_coordinates_to_video_coordinates(subtitle_areas)
+            ocr_regions = self.task_list_component.get_task_option(self.current_processing_task_index, TaskOptions.OCR_REGIONS, [])
+            if len(ocr_regions) > 0:
+                ocr_regions = self.video_display_component.preview_coordinates_to_video_coordinates(ocr_regions)
                 if frame_ori is frame_comp:
                     frame_ori = frame_ori.copy()
-                for rect in subtitle_areas:
+                for rect in ocr_regions:
                     ymin, ymax, xmin, xmax = rect
                     cv2.rectangle(frame_ori, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
         # 内容修复和画质增强使用同一条中性分隔线。若两个帧的尺寸因
@@ -1768,7 +1766,7 @@ class HomeInterface(QWidget):
 
     @Slot(int, object)
     def on_task_error(self, task_index, e):
-        self.append_output(tr['SubtitleExtractorGUI']['ErrorDuringProcessing'].format(str(e)))
+        self.append_output(tr['CleanCanvasWindow']['ErrorDuringProcessing'].format(str(e)))
         if self.task_list_component.get_task(task_index) is not None:
             self.task_list_component.update_task_status(task_index, TaskStatus.FAILED)
 

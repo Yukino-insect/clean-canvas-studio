@@ -1,6 +1,7 @@
 
 # Portions derived from YaoFANGUK/video-subtitle-remover (Apache-2.0).
 # Modified by CleanCanvas Studio contributors; see LICENSE, NOTICE and MODIFICATIONS.md.
+import json
 import os
 from pathlib import Path
 from contextlib import redirect_stdout
@@ -50,25 +51,13 @@ class Config(QConfig):
     windowW = ConfigItem("Window", "Width", 1368)
     windowH = ConfigItem("Window", "Height", 758)
 
-    # 使用一个配置项存储所有选区
-    # 默认值为一个选区，格式为："ymin,ymax,xmin,xmax;ymin,ymax,xmin,xmax;..."，分号分隔不同选区
-    subtitleSelectionAreas = ConfigItem("Main", "SubtitleSelectionAreas", "0.88,0.99,0.15,0.85")
+    # 默认 OCR 检测区域以比例坐标持久化，格式为
+    # "ymin,ymax,xmin,xmax;ymin,ymax,xmin,xmax;..."。
+    ocrSelectionRegions = ConfigItem("Main", "OcrSelectionRegions", "0.88,0.99,0.15,0.85")
 
-    # 【设置像素点偏差】
-    # 用于判断是不是非字幕区域(一般认为字幕文本框的长度是要大于宽度的，如果字幕框的高大于宽，且大于的幅度超过指定像素点大小，则认为是错误检测)
-    subtitleYXAxisDifferencePixel = RangeConfigItem("Main", "SubtitleYXAxisDifferencePixel", 10, RangeValidator(0, 300))
-    # 用于放大mask大小，防止自动检测的文本框过小，inpaint阶段出现文字边，有残留
-    # 允许 0 px，供追求最小静态修复区域的用户关闭扩边；默认 2 px 足以
-    # 覆盖多数抗锯齿边缘，避免旧默认值把大块背景一并交给修复模型。
-    subtitleAreaDeviationPixel = RangeConfigItem("Main", "SubtitleAreaDeviationPixel", 2, RangeValidator(0, 300))
-    # 用于判断两个文本框是否为同一行字幕，高度差距指定像素点以内认为是同一行
-    subtitleAreaYAxisDifferencePixel = RangeConfigItem("Main", "SubtitleAreaYAxisDifferencePixel", 20, RangeValidator(0, 300))
-    # 用于判断两个字幕文本的矩形框是否相似，如果X轴和Y轴偏差都在指定阈值内，则认为时同一个文本框
-    subtitleAreaPixelToleranceYPixel = RangeConfigItem("Main", "SubtitleAreaPixelToleranceYPixel", 20, RangeValidator(0, 300))
-    subtitleAreaPixelToleranceXPixel = RangeConfigItem("Main", "SubtitleAreaPixelToleranceXPixel", 20, RangeValidator(0, 300))
-    # 用于扩展帧数
-    subtitleTimelineBackwardFrameCount = RangeConfigItem("Main", "SubtitleTimelineBackwardFrameCount", 3, RangeValidator(0, 300))
-    subtitleTimelineForwardFrameCount = RangeConfigItem("Main", "subtitleTimelineForwardFrameCount", 3, RangeValidator(0, 300))
+    # OCR 候选多边形向外扩张的像素数。允许 0 px，以便精细控制最终掩膜；
+    # 默认 2 px 用于覆盖常见的抗锯齿边缘，避免把过大的背景区域交给修复模型。
+    ocrMaskPadding = RangeConfigItem("Main", "OcrMaskPadding", 2, RangeValidator(0, 300))
     # 启动时检查应用更新
     # 独立仓库首次发布 Release 后，用户可在设置中自行开启。
     checkUpdateOnStartup = ConfigItem("Main", "CheckUpdateOnStartup", False, BoolValidator())
@@ -129,6 +118,62 @@ class Config(QConfig):
     dynamicOcrOutlineExpand = RangeConfigItem("Mask", "DynamicOcrOutlineExpand", 1, RangeValidator(0, 32))
 
 CONFIG_FILE = 'config/config.json'
+
+
+def _migrate_legacy_main_config(config_file: str) -> None:
+    """将旧版“字幕”配置键一次性迁移为当前内容修复术语。
+
+    两个仍会影响现有行为的值被无损搬迁；其余键属于已经删除的旧检测流程，
+    移除后不会改变当前应用的有效配置。迁移在加载 qfluentwidgets 配置之前
+    执行，因此用户不会因为内部键重命名而丢失选区或掩膜扩边设置。
+    """
+    config_path = Path(config_file)
+    if not config_path.is_file():
+        return
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        main = data.get("Main")
+        if not isinstance(main, dict):
+            return
+    except (OSError, ValueError, TypeError):
+        # 配置读取错误仍交由 qconfig 的正常加载流程处理；启动时不因迁移失败中断。
+        return
+
+    renamed_keys = {
+        "SubtitleSelectionAreas": "OcrSelectionRegions",
+        "SubtitleAreaDeviationPixel": "OcrMaskPadding",
+    }
+    removed_keys = {
+        "SubtitleYXAxisDifferencePixel",
+        "SubtitleAreaYAxisDifferencePixel",
+        "SubtitleAreaPixelToleranceYPixel",
+        "SubtitleAreaPixelToleranceXPixel",
+        "SubtitleTimelineBackwardFrameCount",
+        "subtitleTimelineForwardFrameCount",
+    }
+    changed = False
+    for legacy_key, current_key in renamed_keys.items():
+        if legacy_key in main:
+            main.setdefault(current_key, main[legacy_key])
+            del main[legacy_key]
+            changed = True
+    for legacy_key in removed_keys:
+        if legacy_key in main:
+            del main[legacy_key]
+            changed = True
+
+    if changed:
+        try:
+            config_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            # 只读配置文件不应阻止应用使用默认值或 qconfig 可加载的已有值。
+            pass
+
+
+_migrate_legacy_main_config(CONFIG_FILE)
 config = Config()
 qconfig.load(CONFIG_FILE, config)
 

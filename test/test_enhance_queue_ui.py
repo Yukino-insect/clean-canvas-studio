@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from gui import SubtitleExtractorGUI
+from gui import CleanCanvasWindow
 from ui.component.enhance_task_list_component import EnhanceTaskStatus
 
 
@@ -26,7 +26,7 @@ class EnhanceQueueUITests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_task_selection_completion_preview_and_log(self):
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.resize(1108, 758)
             window.show()
@@ -84,7 +84,7 @@ class EnhanceQueueUITests(unittest.TestCase):
 
     def test_add_tasks_opens_dialog_with_enhance_page_as_parent(self):
         """PySide6 文件对话框的第一个位置参数必须是 QWidget 父对象。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             page = window.enhanceInterface
             with patch("ui.enhance_interface.QtWidgets.QFileDialog.getOpenFileNames", return_value=([], "")) as dialog:
@@ -107,7 +107,7 @@ class EnhanceQueueUITests(unittest.TestCase):
 
     def test_video_progress_keeps_shared_preview_timeline_visible(self):
         """增强视频的运行进度应复用内容修复同款时间轴，而不是收到预览即隐藏。"""
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             page = window.enhanceInterface
             page.task_list.add_task("sample.mp4", "realesrgan_anime", 2.0, "cpu")
@@ -155,7 +155,7 @@ class EnhanceQueueUITests(unittest.TestCase):
                     listener(100, True)
                 return self.media_path
 
-        window = SubtitleExtractorGUI()
+        window = CleanCanvasWindow()
         try:
             window.resize(1108, 758)
             window.show()

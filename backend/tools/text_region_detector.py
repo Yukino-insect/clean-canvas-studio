@@ -1,4 +1,4 @@
-"""PaddleOCR 候选检测与视频动态 OCR 时间轴。"""
+"""PaddleOCR 文字候选检测与视频动态帧映射。"""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def _error_summary(error: BaseException, limit: int = 240) -> str:
     return message[:limit - 1] + "…" if len(message) > limit else message
 
 
-class SubtitleDetect:
-    """检测当前帧文字候选，并为视频生成动态多边形映射。
+class TextRegionDetector:
+    """检测当前帧文字候选，并为视频生成动态文字区域映射。
 
     OCR 不跟随 PyTorch 的 ``AI 设备`` 选项：它由 PaddlePaddle 独立执行。
     初始化时优先使用已安装且可工作的 NVIDIA GPU 后端；驱动、CUDA runtime、
@@ -32,17 +32,17 @@ class SubtitleDetect:
 
     SAMPLE_STEP = 3
 
-    def __init__(self, video_path: str, sub_areas=None) -> None:
-        self.video_path = video_path
-        # ``sub_areas`` 是可选的检测 ROI；为空即在整帧搜索。
-        self.sub_areas = sub_areas or []
+    def __init__(self, media_path: str, ocr_regions=None) -> None:
+        self.media_path = media_path
+        # ``ocr_regions`` 是可选的检测 ROI；为空即在整帧搜索。
+        self.ocr_regions = ocr_regions or []
         self._init_sample_step()
 
     def _init_sample_step(self) -> None:
-        if is_image_file(self.video_path):
+        if is_image_file(self.media_path):
             self.SAMPLE_STEP = 1
             return
-        capture = cv2.VideoCapture(get_readable_path(self.video_path))
+        capture = cv2.VideoCapture(get_readable_path(self.media_path))
         fps = capture.get(cv2.CAP_PROP_FPS)
         capture.release()
         if fps >= 60:
@@ -86,7 +86,7 @@ class SubtitleDetect:
         except Exception as gpu_error:
             # 某些 Paddle/CUDA 问题只会在第一次推理而非构造模型时暴露。若当前
             # 确实是 GPU 实例，则同样重建 CPU 检测器并重试这一帧；CPU 自身失败
-            # 必须原样抛出，不能把真实 OCR 错误伪装成“无字幕”。
+            # 必须原样抛出，不能把真实 OCR 错误伪装成“未检测到文字”。
             if getattr(self, "ocr_device", None) != "gpu:0":
                 raise
             self.text_detector = self._create_cpu_detector()
@@ -108,7 +108,7 @@ class SubtitleDetect:
                 if len(parsed) >= 3:
                     score = float(scores[index]) if index < len(scores) else 1.0
                     polygons.append(OcrPolygon(parsed, score))
-        roi_regions = [(xmin, xmax, ymin, ymax) for ymin, ymax, xmin, xmax in self.sub_areas]
+        roi_regions = [(xmin, xmax, ymin, ymax) for ymin, ymax, xmin, xmax in self.ocr_regions]
         return sorted(
             filter_polygons_by_regions(polygons, roi_regions),
             key=lambda polygon: (polygon.bbox[2], polygon.bbox[0], -polygon.score),
@@ -148,13 +148,13 @@ class SubtitleDetect:
     def find_polygon_frame_map(
         self,
         strategy: VideoMaskStrategy | str,
-        sub_remover: Any | None = None,
+        repair_processor: Any | None = None,
         sample_step: int | None = None,
     ) -> dict[int, list[OcrPolygon]]:
-        """按采样或逐帧频率检测视频字幕，返回 1-based 帧号到多边形的映射。"""
+        """按采样或逐帧频率检测视频文字，返回 1-based 帧号到多边形的映射。"""
         selected = strategy if isinstance(strategy, VideoMaskStrategy) else VideoMaskStrategy(strategy)
         step = 1 if selected is VideoMaskStrategy.EVERY_FRAME_OCR else max(1, sample_step or self.SAMPLE_STEP)
-        capture = cv2.VideoCapture(get_readable_path(self.video_path))
+        capture = cv2.VideoCapture(get_readable_path(self.media_path))
         frame_count = max(1, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
         sampled: dict[int, list[OcrPolygon]] = {}
         frame_no = 0
@@ -164,19 +164,19 @@ class SubtitleDetect:
             if not ok:
                 break
             frame_no += 1
-            ab_sections = getattr(sub_remover, "ab_sections", None)
+            ab_sections = getattr(repair_processor, "ab_sections", None)
             if is_frame_number_in_ab_sections(frame_no - 1, ab_sections) and (frame_no - 1) % step == 0:
                 polygons = self.detect_polygons(frame)
                 if polygons:
                     sampled[frame_no] = polygons
-            if sub_remover:
+            if repair_processor:
                 # OCR 预扫描尚未写出任何修复帧，不能驱动任务进度或预览时间轴。
-                # 每推进约 10% 仅写一条日志，让用户知道后台仍在定位字幕。
+                # 每推进约 10% 仅写一条日志，让用户知道后台仍在定位文字。
                 percent = min(100, int(100 * frame_no / frame_count))
                 if percent >= last_logged_percent + 10 or percent == 100:
-                    append_output = getattr(sub_remover, "append_output", None)
+                    append_output = getattr(repair_processor, "append_output", None)
                     if callable(append_output):
-                        append_output(f"动态 OCR 正在扫描字幕位置：{percent}%（定位阶段）。")
+                        append_output(f"动态 OCR 正在扫描文字位置：{percent}%（定位阶段）。")
                     last_logged_percent = percent
         capture.release()
         if selected is VideoMaskStrategy.EVERY_FRAME_OCR:

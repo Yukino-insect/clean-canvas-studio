@@ -24,8 +24,8 @@ from backend.masking import (
     polygon_mask,
     refine_ocr_polygon_mask,
 )
-from backend.main import SubtitleRemover
-from backend.tools.subtitle_detect import SubtitleDetect
+from backend.main import ContentRepairProcessor
+from backend.tools.text_region_detector import TextRegionDetector
 
 
 class PreciseMaskTests(unittest.TestCase):
@@ -148,7 +148,7 @@ class PreciseMaskTests(unittest.TestCase):
         """业务入口必须真正使用精细 mask，且不能混入冻结的静态组合计划。"""
         image = np.full((40, 50, 3), (30, 30, 30), dtype=np.uint8)
         image[12:16, 15:23] = (255, 255, 255)
-        remover = object.__new__(SubtitleRemover)
+        remover = object.__new__(ContentRepairProcessor)
         remover.mask_plan = MaskPlan(manual_regions=[(40, 48, 30, 38)]).to_dict()
         remover.dynamic_ocr_refine_mask = True
         remover.dynamic_ocr_foreground = "#FFFFFF"
@@ -163,7 +163,7 @@ class PreciseMaskTests(unittest.TestCase):
 
     def test_sampled_dynamic_ocr_never_uses_stale_pixel_refinement(self):
         """采样任务快照即使带着旧 refine 标志，也必须在运行端归零。"""
-        remover = object.__new__(SubtitleRemover)
+        remover = object.__new__(ContentRepairProcessor)
         remover.video_mask_strategy = VideoMaskStrategy.SAMPLED_OCR.value
         remover.dynamic_ocr_refine_mask = True
         logs = []
@@ -173,7 +173,7 @@ class PreciseMaskTests(unittest.TestCase):
         self.assertIn("已忽略任务快照", logs[0])
 
     def test_dynamic_ocr_polygon_does_not_reuse_frozen_manual_mask(self):
-        remover = object.__new__(SubtitleRemover)
+        remover = object.__new__(ContentRepairProcessor)
         remover.mask_plan = MaskPlan(
             mode=MaskMode.RECTANGLE,
             manual_regions=[(60, 70, 60, 70)],
@@ -191,9 +191,9 @@ class PreciseMaskTests(unittest.TestCase):
         )
 
     def test_video_rejects_dynamic_ocr_and_static_mask_together(self):
-        remover = object.__new__(SubtitleRemover)
+        remover = object.__new__(ContentRepairProcessor)
         remover.video_dynamic_ocr = True
-        remover.is_picture = False
+        remover.is_image = False
         remover.mask_plan = MaskPlan(mode=MaskMode.RECTANGLE).to_dict()
         with self.assertRaisesRegex(RuntimeError, "不能在同一视频任务中同时执行"):
             remover.run()
@@ -207,9 +207,9 @@ class PreciseMaskTests(unittest.TestCase):
             def update(self, amount):
                 self.n += amount
 
-        remover = object.__new__(SubtitleRemover)
+        remover = object.__new__(ContentRepairProcessor)
         remover.video_dynamic_ocr = True
-        remover.is_picture = False
+        remover.is_image = False
         remover.progress_total = 0
         remover.progress_remover = 0
         remover.isFinished = False
@@ -240,7 +240,7 @@ class PolygonVideoStrategyTests(unittest.TestCase):
                 if device == "gpu:0":
                     raise RuntimeError("CUDA runtime unavailable")
 
-        detector = object.__new__(SubtitleDetect)
+        detector = object.__new__(TextRegionDetector)
         with patch.dict(sys.modules, {"paddleocr": SimpleNamespace(TextDetection=FakeTextDetection)}), \
                 patch("builtins.print") as log:
             instance = detector.text_detector
@@ -263,9 +263,9 @@ class PolygonVideoStrategyTests(unittest.TestCase):
                     "dt_scores": [0.73],
                 }]
 
-        detector = object.__new__(SubtitleDetect)
-        detector.video_path = "unused.png"
-        detector.sub_areas = []
+        detector = object.__new__(TextRegionDetector)
+        detector.media_path = "unused.png"
+        detector.ocr_regions = []
         detector.ocr_device = "gpu:0"
         detector.__dict__["text_detector"] = BrokenGpuDetector()
         with patch.object(detector, "_create_cpu_detector", return_value=CpuDetector()) as create_cpu, \
@@ -285,9 +285,9 @@ class PolygonVideoStrategyTests(unittest.TestCase):
                     "dt_scores": [0.73],
                 }]
 
-        detector = object.__new__(SubtitleDetect)
-        detector.video_path = "unused.png"
-        detector.sub_areas = []
+        detector = object.__new__(TextRegionDetector)
+        detector.media_path = "unused.png"
+        detector.ocr_regions = []
         detector.__dict__["text_detector"] = FakeDetector()
         polygons = detector.detect_polygons(np.zeros((10, 10, 3), dtype=np.uint8))
         self.assertEqual(polygons, [OcrPolygon(((1, 2), (9, 3), (8, 7), (2, 6)), 0.73)])
@@ -301,10 +301,10 @@ class PolygonVideoStrategyTests(unittest.TestCase):
         return str(path)
 
     def test_sampled_and_every_frame_strategies_call_ocr_expected_times(self):
-        class CountingDetector(SubtitleDetect):
+        class CountingDetector(TextRegionDetector):
             def __init__(self, path):
-                self.video_path = path
-                self.sub_areas = []
+                self.media_path = path
+                self.ocr_regions = []
                 self.calls = 0
                 self.SAMPLE_STEP = 2
 
@@ -324,13 +324,13 @@ class PolygonVideoStrategyTests(unittest.TestCase):
 
             scan_logger = ScanLogger()
             sampled = detector.find_polygon_frame_map(
-                VideoMaskStrategy.SAMPLED_OCR, sub_remover=scan_logger, sample_step=2,
+                VideoMaskStrategy.SAMPLED_OCR, repair_processor=scan_logger, sample_step=2,
             )
             self.assertEqual(detector.calls, 3)
             self.assertIn(2, sampled)  # 采样帧间会填补中间帧。
-            self.assertTrue(any("动态 OCR 正在扫描字幕位置" in message for message in scan_logger.logs))
+            self.assertTrue(any("动态 OCR 正在扫描文字位置" in message for message in scan_logger.logs))
 
-            detector = CountingDetector(detector.video_path)
+            detector = CountingDetector(detector.media_path)
             every = detector.find_polygon_frame_map(VideoMaskStrategy.EVERY_FRAME_OCR)
             self.assertEqual(detector.calls, 5)
             self.assertEqual(set(every), {1, 2, 3, 4, 5})

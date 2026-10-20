@@ -958,7 +958,7 @@ class VideoDisplayComponent(QWidget):
     def load_selections_from_config(self):
         """从配置中加载选择框的相对位置和大小"""
         # 从配置中读取选择框的相对位置和大小
-        areas_str = config.subtitleSelectionAreas.value
+        areas_str = config.ocrSelectionRegions.value
 
         # 检查配置值是否有效
         if not areas_str:
@@ -1062,9 +1062,9 @@ class VideoDisplayComponent(QWidget):
             areas_str_parts.append(f"{round(ymin,4)},{round(ymax,4)},{round(xmin,4)},{round(xmax,4)}")
 
         # 更新配置
-        config.subtitleSelectionAreas.value = ";".join(areas_str_parts)
-        if len(config.subtitleSelectionAreas.value) <= 0:
-            config.subtitleSelectionAreas.value = config.subtitleSelectionAreas.defaultValue
+        config.ocrSelectionRegions.value = ";".join(areas_str_parts)
+        if len(config.ocrSelectionRegions.value) <= 0:
+            config.ocrSelectionRegions.value = config.ocrSelectionRegions.defaultValue
         qconfig.save()
 
     def get_selection_rects(self):
@@ -1191,18 +1191,18 @@ class VideoDisplayComponent(QWidget):
         self.context_menu = QMenu(self)
 
         # 设定区块起点动作
-        self.action_mark_ab_start = QAction(tr['SubtitleExtractorGUI']['MarkABStart'], self)
+        self.action_mark_ab_start = QAction(tr['CleanCanvasWindow']['MarkABStart'], self)
         self.action_mark_ab_start.setShortcut("[")
         self.action_mark_ab_start.triggered.connect(self.__handle_mark_for_ab_start)
         self.context_menu.addAction(self.action_mark_ab_start)
 
         # 设定区块终点动作
-        self.action_mark_ab_end = QAction(tr['SubtitleExtractorGUI']['MarkABEnd'], self)
+        self.action_mark_ab_end = QAction(tr['CleanCanvasWindow']['MarkABEnd'], self)
         self.action_mark_ab_end.setShortcut("]")
         self.action_mark_ab_end.triggered.connect(self.__handle_mark_for_ab_end)
         self.context_menu.addAction(self.action_mark_ab_end)
 
-        self.action_mark_ab_delete = QAction(tr['SubtitleExtractorGUI']['DeleteABSection'], self)
+        self.action_mark_ab_delete = QAction(tr['CleanCanvasWindow']['DeleteABSection'], self)
         self.action_mark_ab_delete.setShortcut("\\")
         self.action_mark_ab_delete.triggered.connect(self.__handle_delete_ab_section)
         self.context_menu.addAction(self.action_mark_ab_delete)
@@ -1212,7 +1212,7 @@ class VideoDisplayComponent(QWidget):
         self.action_clear_ab_sections.triggered.connect(self.clear_ab_sections)
         self.context_menu.addAction(self.action_clear_ab_sections)
 
-        self.action_delete_selection = QAction(tr['SubtitleExtractorGUI']['DeleteSelection'], self)
+        self.action_delete_selection = QAction(tr['CleanCanvasWindow']['DeleteSelection'], self)
         self.action_delete_selection.setShortcut("DELETE")
         self.action_delete_selection.triggered.connect(self.__handle_delete_selection)
         self.context_menu.addAction(self.action_delete_selection)

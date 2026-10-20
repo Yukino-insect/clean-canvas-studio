@@ -5,13 +5,13 @@ from __future__ import annotations
 import time
 import unittest
 
-from backend.tools.subtitle_remover_remote_call import SubtitleRemoverRemoteCall
+from backend.tools.content_repair_message_bridge import ContentRepairMessageBridge
 
 
 class ContentRepairProgressBridgeTests(unittest.TestCase):
     def test_finish_waits_for_all_progress_messages_before_returning(self):
         """FINISH 之前排队的进度必须全部转发，不能只留下启动时的 1%。"""
-        bridge = SubtitleRemoverRemoteCall()
+        bridge = ContentRepairMessageBridge()
         received = []
 
         def receive_progress(progress, _finished):

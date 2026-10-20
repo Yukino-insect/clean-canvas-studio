@@ -102,7 +102,7 @@ OCR 多边形（OCR 认为文字在哪里）
 └─────────────────────┬────────────────────────────────────┘
                       ▼
 ┌──────────────────────────────────────────────────────────┐
-│                    SubtitleRemover                         │
+│                    ContentRepairProcessor                         │
 │  图片/视频分流、A/B 区间、掩膜策略、修复引擎、输出收尾         │
 └───────┬─────────────────────┬───────────────────┬────────┘
         │                     │                   │
@@ -127,8 +127,8 @@ OCR 多边形（OCR 认为文字在哪里）
 | [ui/home_interface.py](../ui/home_interface.py) | 文件队列、OCR 回显确认、任务启动、子进程回调、预览显示。 |
 | [ui/enhance_interface.py](../ui/enhance_interface.py) | 独立的图片/视频画质增强页面。 |
 | [ui/component/video_display_component.py](../ui/component/video_display_component.py) | 视频帧显示、ROI 画框、移动、缩放、删除与 A/B 区间。 |
-| [backend/main.py](../backend/main.py) | `SubtitleRemover`：图片/视频处理总编排。 |
-| [backend/tools/subtitle_detect.py](../backend/tools/subtitle_detect.py) | PaddleOCR 检测、OCR 多边形、视频采样/逐帧多边形策略。 |
+| [backend/main.py](../backend/main.py) | `ContentRepairProcessor`：图片/视频处理总编排。 |
+| [backend/tools/text_region_detector.py](../backend/tools/text_region_detector.py) | PaddleOCR 文字区域检测、OCR 多边形、视频采样/逐帧多边形策略。 |
 | [backend/masking.py](../backend/masking.py) | `OcrPolygon`、`MaskPlan`、OCR 多边形/矩形/涂鸦/颜色筛选 mask。 |
 | [backend/inpaint/engine.py](../backend/inpaint/engine.py) | 修复模式注册、模型缓存、LaMa/Anime-LaMa/Manga 引擎。 |
 | [backend/inpaint/opencv_inpaint.py](../backend/inpaint/opencv_inpaint.py) | OpenCV Telea 快速修复。 |
@@ -199,7 +199,7 @@ expand_pixels            已确认手工矩形的边缘膨胀像素
 
 任务列表的 `TaskOptions` 会保存：
 
-- `sub_areas`：预览坐标中的候选 ROI；
+- `ocr_regions`：预览坐标中的候选 ROI；
 - `ocr_polygons`：用于界面回显的 OCR 候选轮廓，不进入 `MaskPlan`；
 - `brush_strokes`：手工涂鸦路径；
 - `mask_drafts`：按矩形、涂鸦、颜色筛选分开的未确认预选区；
@@ -598,8 +598,8 @@ AI 模型不在应用启动时加载，而是用户实际选择相应模式后�
 因此 AI 端到端测试使用环境变量显式开启：
 
 ```powershell
-$env:VSR_MODEL_DIR = "你的模型缓存目录"
-$env:VSR_RUN_AI_INTEGRATION = "1"
+$env:CLEAN_CANVAS_MODEL_DIR = "你的模型缓存目录"
+$env:CLEAN_CANVAS_RUN_AI_INTEGRATION = "1"
 .\.venv\Scripts\python.exe -m unittest test.test_ai_integration_optional -v
 ```
 
@@ -631,7 +631,7 @@ $env:VSR_RUN_AI_INTEGRATION = "1"
 
 **回答：**
 
-整体可分为 GUI 层、任务调度/IPC 层、业务编排层、OCR/掩膜层、修复模型层、视频 I/O 层和增强层。GUI 只负责交互；耗时模型在子进程运行；`SubtitleRemover` 负责串联流程；掩膜和修复引擎通过数据结构与协议解耦。
+整体可分为 GUI 层、任务调度/IPC 层、业务编排层、OCR/掩膜层、修复模型层、视频 I/O 层和增强层。GUI 只负责交互；耗时模型在子进程运行；`ContentRepairProcessor` 负责串联流程；掩膜和修复引擎通过数据结构与协议解耦。
 
 #### Q4：你认为项目最有价值的设计是什么？
 

@@ -121,11 +121,11 @@ class ModelStore:
     """模型缓存、完整性校验与原子下载。
 
     下载永远先落到临时文件，哈希匹配后再替换正式文件，避免取消/断网后把
-    半个权重当成有效模型。缓存目录可由 ``VSR_MODEL_DIR`` 或高级设置覆盖。
+    半个权重当成有效模型。缓存目录可由 ``CLEAN_CANVAS_MODEL_DIR`` 或高级设置覆盖。
     """
 
     def __init__(self, model_dir: str | Path | None = None) -> None:
-        self.model_dir = Path(model_dir or os.environ.get("VSR_MODEL_DIR") or DEFAULT_MODEL_DIR)
+        self.model_dir = Path(model_dir or os.environ.get("CLEAN_CANVAS_MODEL_DIR") or DEFAULT_MODEL_DIR)
         self._lock = threading.Lock()
 
     @staticmethod

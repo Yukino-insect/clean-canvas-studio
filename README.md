@@ -216,7 +216,7 @@ python backend/main.py `
   --manual-area 120 560 620 710
 ```
 
-`-c / --subtitle-area-coords` 仍可限制自动 OCR 的候选区域，其顺序为 `YMIN YMAX XMIN XMAX`；`-m / --manual-area` 则会直接产生修复掩膜，可重复指定。完整参数：
+`-c / --ocr-region-coords` 仍可限制自动 OCR 的候选区域，其顺序为 `YMIN YMAX XMIN XMAX`；`-m / --manual-area` 则会直接产生修复掩膜，可重复指定。完整参数：
 
 ```powershell
 python backend/main.py --help

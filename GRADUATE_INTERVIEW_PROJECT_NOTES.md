@@ -1,6 +1,6 @@
-# Video Subtitle Remover 研究生复试项目讲义
+# CleanCanvas Studio 研究生复试项目讲义
 
-这份材料用于把当前 `video-subtitle-remover` 项目整理成研究生复试简历上的项目经历，并准备老师追问时的回答。
+这份材料用于把当前 `CleanCanvas Studio` 项目整理成研究生复试简历上的项目经历，并准备老师追问时的回答。
 
 请注意：简历上只放“凝练后的事实”，面试时再展开讲。简历不是小说，写得太满反而像是在替老师准备质疑点，这种事并不值得主动创造。
 
@@ -110,35 +110,28 @@
 ## 4. 核心源码位置
 
 - 后端主流程：`backend/main.py`
-  - `SubtitleRemover` 是核心处理类。
-  - `propainter_mode` 负责 ProPainter 模式。
-  - `sttn_auto_mode` 负责跳过检测的 STTN 区域修复。
-  - `video_inpaint` 负责检测后修复模式。
-  - `run` 负责调度图片/视频处理、模型选择和最终收尾。
+  - `ContentRepairProcessor` 是核心处理类。
+  - `repair_image` 与 `repair_video` 分别处理图片和视频；两者复用同一套掩膜与修复引擎。
+  - `run` 负责校验任务配置、调度处理流程、回收媒体资源和写出结果。
   - `merge_audio_to_video` 负责原音频合并回填。
 
-- 字幕检测：`backend/tools/subtitle_detect.py`
-  - `SubtitleDetect` 负责 OCR 检测和字幕时间轴整理。
+- 文字区域检测：`backend/tools/text_region_detector.py`
+  - `TextRegionDetector` 负责 OCR 文字区域检测和动态帧映射整理。
   - `_init_sample_step` 根据 fps 调整采样间隔。
   - `text_detector` 延迟加载 PaddleOCR 文本检测器。
-  - `find_subtitle_frame_no` 采样检测并对中间帧插值补全。
-  - `unify_regions` 统一相邻帧相似区域。
-  - `find_continuous_ranges_with_same_mask` 合并具有相同 mask 的连续帧。
-  - `split_range_by_scene`、`expand_ranges_by_scene` 用于 ProPainter 的场景约束时间轴扩展。
+  - `find_polygon_frame_map` 按采样或逐帧策略检测，并在相邻采样点间保守填补多边形映射。
 
 - mask 与区域工具：`backend/tools/inpaint_tools.py`
-  - `create_mask` 将字幕框转为二值 mask，并按配置做区域外扩。
-  - `get_inpaint_area_by_mask` 使用连通域分析确定待修复区域。
-  - `batch_generator` 将长序列均匀切分为批次。
-  - `expand_frame_ranges` 扩展字幕时间轴，覆盖字幕淡入淡出边界帧。
+  - `is_frame_number_in_ab_sections` 判断视频帧是否处于用户确认的处理区间。
+  - 最终掩膜的构建由 `backend/masking.py` 中的 `MaskPlan`、多边形、手工矩形、涂鸦与颜色筛选共同完成。
 
 - 视频 I/O：`backend/tools/video_io.py`
   - `FramePrefetcher` 后台线程预读取帧。
   - `FFmpegVideoWriter` 通过 FFmpeg 管道写入 libx264 视频。
 
-- 硬件适配：`backend/tools/hardware_accelerator.py`
-  - 检测 CUDA、DirectML、MPS、ONNX Runtime Provider。
-  - 提供统一的推理设备选择和显存估算。
+- 修复模型与设备选择：`backend/inpaint/engine.py`
+  - 按 OpenCV、LaMa、Anime-LaMa 或 Manga 模式创建并缓存修复引擎。
+  - `CLEAN_CANVAS_MODEL_DIR` 可覆盖模型缓存目录；OCR 的 PaddlePaddle 设备与 PyTorch 修复设备独立回退。
 
 - GUI：`gui.py`、`ui/home_interface.py`
   - `HomeInterface` 负责主界面、视频加载、任务队列、进度同步、子进程调用和预览更新。

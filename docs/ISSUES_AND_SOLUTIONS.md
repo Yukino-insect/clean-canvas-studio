@@ -238,7 +238,7 @@ GUI 对图片输出路径使用 `.png`，但旧后端按源文件扩展名调用
 
 **解决方案**
 
-后端按 `video_out_path` 的实际后缀选择编码器，并对不支持后缀回退为 PNG。
+内容修复处理器按 `output_path` 的实际后缀选择编码器，并对不支持后缀回退为 PNG。
 
 **验证**
 
@@ -623,8 +623,8 @@ LaMa、Anime-LaMa 和 Real-ESRGAN 都主要面向单帧图像。逐帧运行时�
 默认测试不会联网下载模型。需要验证真实 Anime-LaMa 或 Real-ESRGAN 权重时，应显式配置：
 
 ```powershell
-$env:VSR_MODEL_DIR = "模型缓存目录"
-$env:VSR_RUN_AI_INTEGRATION = "1"
+$env:CLEAN_CANVAS_MODEL_DIR = "模型缓存目录"
+$env:CLEAN_CANVAS_RUN_AI_INTEGRATION = "1"
 .\.venv\Scripts\python.exe -m unittest test.test_ai_integration_optional -v
 ```
 

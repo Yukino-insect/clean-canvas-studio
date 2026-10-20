@@ -11,7 +11,7 @@ class Command(Enum):
     ERROR = 4,
     UPDATE_PREVIEW_WITH_COMP = 5,
 
-class SubtitleRemoverRemoteCall:
+class ContentRepairMessageBridge:
     """将子进程回调转发到 GUI 进程的队列桥。
 
     ``multiprocessing.Process`` 不能直接调用 Qt 槽函数，因此子进程只写入

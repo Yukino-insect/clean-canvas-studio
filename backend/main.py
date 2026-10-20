@@ -36,44 +36,44 @@ from backend.masking import (
     refine_ocr_polygon_mask,
 )
 from backend.tools.inpaint_tools import is_frame_number_in_ab_sections
-from backend.tools.subtitle_detect import SubtitleDetect
+from backend.tools.text_region_detector import TextRegionDetector
 from backend.tools.video_io import FramePrefetcher, FFmpegVideoWriter
 
 
-SubtitleArea: TypeAlias = tuple[int, int, int, int]
+OcrRegion: TypeAlias = tuple[int, int, int, int]
 ProgressListener: TypeAlias = Callable[[int, bool], None]
 
 
-class SubtitleRemover:
+class ContentRepairProcessor:
     """内容修复主编排器。
 
     负责统一图片与视频的输入、最终掩膜、修复引擎、进度通知和输出封装；
     不在此类中决定 GUI 交互，GUI 只通过选项和回调与它交换数据。
     """
 
-    def __init__(self, vd_path: str, gui_mode: bool = False) -> None:
+    def __init__(self, media_path: str, gui_mode: bool = False) -> None:
         self.lock = threading.RLock()
-        self.sub_areas: list[SubtitleArea] = []
+        self.ocr_regions: list[OcrRegion] = []
         self.gui_mode = gui_mode
-        self.is_picture = is_image_file(str(vd_path))
-        self.video_path = vd_path
-        self.vd_name = Path(self.video_path).stem
-        if self.is_picture:
-            image = read_image(self.video_path)
+        self.is_image = is_image_file(str(media_path))
+        self.media_path = media_path
+        self.media_name = Path(self.media_path).stem
+        if self.is_image:
+            image = read_image(self.media_path)
             if image is None:
                 self.size = (0, 0)
             else:
                 self.size = (image.shape[1], image.shape[0])
-            self.video_cap = None
+            self.media_capture = None
             self.frame_count = 1
             self.fps = 1.0
         else:
-            self.video_cap = cv2.VideoCapture(get_readable_path(vd_path))
-            self.frame_count = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)
-            self.fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 25.0
+            self.media_capture = cv2.VideoCapture(get_readable_path(media_path))
+            self.frame_count = int(self.media_capture.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)
+            self.fps = self.media_capture.get(cv2.CAP_PROP_FPS) or 25.0
             self.size = (
-                int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                int(self.media_capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(self.media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             )
         self.mask_size = (self.size[1], self.size[0])
         self.frame_height, self.frame_width = self.mask_size
@@ -81,20 +81,20 @@ class SubtitleRemover:
         # 图片不需要视频写入器；视频的临时文件由 FFmpeg 编码后再回封装原音频。
         self.video_temp_file = None
         self.video_writer = None
-        if not self.is_picture:
+        if not self.is_image:
             # Windows 下 NamedTemporaryFile(delete=True) 会阻止 FFmpeg 打开文件。
             self.video_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             self.video_writer = FFmpegVideoWriter(
                 get_readable_path(self.video_temp_file.name), self.fps, self.size
             )
-        self.video_out_path = os.path.abspath(
-            os.path.join(os.path.dirname(self.video_path), f"{self.vd_name}_no_sub.mp4")
+        self.output_path = os.path.abspath(
+            os.path.join(os.path.dirname(self.media_path), f"{self.media_name}_repaired.mp4")
         )
-        self.ext = os.path.splitext(vd_path)[-1]
-        if self.is_picture:
-            pic_dir = os.path.join(os.path.dirname(self.video_path), "no_sub")
+        self.extension = os.path.splitext(media_path)[-1]
+        if self.is_image:
+            pic_dir = os.path.join(os.path.dirname(self.media_path), "repaired")
             os.makedirs(pic_dir, exist_ok=True)
-            self.video_out_path = os.path.join(pic_dir, f"{self.vd_name}{self.ext}")
+            self.output_path = os.path.join(pic_dir, f"{self.media_name}{self.extension}")
 
         # 这两个值既供命令行进度条使用，也会通过进度监听器同步给 GUI。
         self.progress_total = 0
@@ -144,7 +144,7 @@ class SubtitleRemover:
     def begin_dynamic_ocr_scan(self, strategy: VideoMaskStrategy) -> None:
         """在日志中标记动态 OCR 的预处理开始，不改变任务/时间轴进度。"""
         self.append_output(
-            f"正在初始化动态 OCR 并扫描字幕位置（{strategy.value}）。"
+            f"正在初始化动态 OCR 并扫描文字位置（{strategy.value}）。"
             "定位阶段仅输出日志；任务进度将在开始逐帧修复后更新。"
         )
 
@@ -203,7 +203,7 @@ class SubtitleRemover:
                     getattr(self, "dynamic_ocr_refine_tolerance", config.dynamicOcrRefineTolerance.value),
                     getattr(self, "dynamic_ocr_outline_expand", config.dynamicOcrOutlineExpand.value),
                 )
-            return polygon_mask(frame.shape, polygons, config.subtitleAreaDeviationPixel.value)
+            return polygon_mask(frame.shape, polygons, config.ocrMaskPadding.value)
         plan = self._plan()
         if plan:
             return build_mask(frame, plan)
@@ -241,7 +241,7 @@ class SubtitleRemover:
             )
         return strategy
 
-    def remove_video_subtitles(self, tbar: tqdm) -> None:
+    def repair_video(self, tbar: tqdm) -> None:
         """按视频策略生成每帧掩膜，并使用当前选择的修复引擎写出结果。"""
         polygon_frames: dict[int, list[OcrPolygon]] = {}
         plan = self._plan()
@@ -249,26 +249,26 @@ class SubtitleRemover:
         if self.video_dynamic_ocr:
             refine_hint = "，字幕像素精细定位已开启" if self.dynamic_ocr_refine_mask else ""
             self.append_output(f"动态 OCR 字幕定位已启用：{strategy.value}{refine_hint}。")
-            sub_detector = SubtitleDetect(self.video_path, self.sub_areas)
+            text_detector = TextRegionDetector(self.media_path, self.ocr_regions)
             self.begin_dynamic_ocr_scan(strategy)
-            polygon_frames = sub_detector.find_polygon_frame_map(
+            polygon_frames = text_detector.find_polygon_frame_map(
                 strategy,
-                sub_remover=self,
+                repair_processor=self,
                 sample_step=config.ocrSampleStep.value,
             )
             if not polygon_frames:
-                raise RuntimeError(tr["Main"]["NoSubtitleDetected"].format(self.video_path))
+                raise RuntimeError(tr["Main"]["NoRepairTargetDetected"].format(self.media_path))
             self.append_output(
-                f"动态 OCR 定位完成：已为 {len(polygon_frames)} 帧生成字幕区域；"
+                f"动态 OCR 定位完成：已为 {len(polygon_frames)} 帧生成文字区域；"
                 "现在开始逐帧修复与编码，任务进度将随实际输出帧更新。"
             )
         elif plan is None:
-            raise RuntimeError(tr["Main"]["NoSubtitleDetected"].format(self.video_path))
+            raise RuntimeError(tr["Main"]["NoRepairTargetDetected"].format(self.media_path))
         else:
             self.append_output(f"使用已确认的最终掩膜计划：{plan.mode.value}。")
 
-        self.append_output(tr["Main"]["ProcessingStartRemovingSubtitles"])
-        reader = FramePrefetcher(self.video_cap)
+        self.append_output(tr["Main"]["ProcessingStartContentRepair"])
+        reader = FramePrefetcher(self.media_capture)
         frame_no = 0
         try:
             while True:
@@ -289,25 +289,25 @@ class SubtitleRemover:
         finally:
             reader.stop()
             if self.video_dynamic_ocr:
-                del sub_detector
+                del text_detector
             gc.collect()
 
-    def remove_image_subtitles(self) -> None:
+    def repair_image(self) -> None:
         """处理单张图片；复用与视频相同的最终 mask 和修复引擎。"""
-        original_frame = read_image(self.video_path)
+        original_frame = read_image(self.media_path)
         if original_frame is None:
-            raise RuntimeError(tr["Main"]["ReadImageFailed"].format(self.video_path))
+            raise RuntimeError(tr["Main"]["ReadImageFailed"].format(self.media_path))
         plan = self._plan()
         if plan is None:
             raise RuntimeError("图片修复需要先确认最终掩膜。")
         repaired = self._repair(original_frame)
-        output_ext = Path(self.video_out_path).suffix.lower() or self.ext.lower() or ".png"
+        output_ext = Path(self.output_path).suffix.lower() or self.extension.lower() or ".png"
         if output_ext not in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}:
             output_ext = ".png"
         encoded, data = cv2.imencode(output_ext, repaired)
         if not encoded:
-            raise RuntimeError(f"无法编码图片输出：{self.video_out_path}")
-        data.tofile(self.video_out_path)
+            raise RuntimeError(f"无法编码图片输出：{self.output_path}")
+        data.tofile(self.output_path)
         gc.collect()
 
     def merge_audio_to_video(self) -> None:
@@ -322,7 +322,7 @@ class SubtitleRemover:
             subprocess.check_output(
                 [
                     FFmpegCLI.instance().ffmpeg_path,
-                    "-y", "-i", self.video_path, "-acodec", "copy", "-vn", "-loglevel", "error", temp_audio.name,
+                    "-y", "-i", self.media_path, "-acodec", "copy", "-vn", "-loglevel", "error", temp_audio.name,
                 ],
                 stdin=subprocess.DEVNULL,
                 shell=use_shell,
@@ -332,7 +332,7 @@ class SubtitleRemover:
                 [
                     FFmpegCLI.instance().ffmpeg_path,
                     "-y", "-i", self.video_temp_file.name, "-i", temp_audio.name,
-                    "-vcodec", "copy", "-acodec", "copy", "-loglevel", "error", self.video_out_path,
+                    "-vcodec", "copy", "-acodec", "copy", "-loglevel", "error", self.output_path,
                 ],
                 stdin=subprocess.DEVNULL,
                 shell=use_shell,
@@ -351,10 +351,10 @@ class SubtitleRemover:
                     pass
             if not self.is_successful_merged:
                 try:
-                    shutil.copy2(self.video_temp_file.name, self.video_out_path)
+                    shutil.copy2(self.video_temp_file.name, self.output_path)
                 except OSError as exc:
                     self.append_output(
-                        tr["Main"]["CopyFileFailed"].format(self.video_temp_file.name, self.video_out_path, str(exc))
+                        tr["Main"]["CopyFileFailed"].format(self.video_temp_file.name, self.output_path, str(exc))
                     )
             self.video_temp_file.close()
 
@@ -365,10 +365,10 @@ class SubtitleRemover:
             InpaintMode.ANIME_LAMA.value: f"Anime-LaMa ({self.ai_device})",
             InpaintMode.MANGA.value: f"Manga ({self.ai_device})",
         }
-        self.append_output(tr["Main"]["SubtitleRemoverModel"].format(mode_info.get(self.inpaint_mode, self.inpaint_mode)))
+        self.append_output(tr["Main"]["RepairModel"].format(mode_info.get(self.inpaint_mode, self.inpaint_mode)))
         plan = self._plan()
-        if self.video_dynamic_ocr and not self.is_picture:
-            self.append_output(f"修复区域来源: 动态 OCR 字幕定位（{self.video_mask_strategy}）。")
+        if self.video_dynamic_ocr and not self.is_image:
+            self.append_output(f"修复区域来源: 动态 OCR 文字定位（{self.video_mask_strategy}）。")
         elif plan:
             sources = "、".join(mode.value for mode in plan.source_modes) or plan.mode.value
             self.append_output(f"修复区域来源: 已确认的组合掩膜计划（{sources}）。")
@@ -390,51 +390,51 @@ class SubtitleRemover:
     def run(self) -> None:
         """执行完整任务，并确保视频句柄、写入器和临时文件最终得到清理。"""
         start_time = time.time()
-        if self.video_dynamic_ocr and not self.is_picture and self.mask_plan:
+        if self.video_dynamic_ocr and not self.is_image and self.mask_plan:
             raise RuntimeError(
                 "动态 OCR 字幕定位与静态最终掩膜不能在同一视频任务中同时执行。"
                 "请只保留一种策略；若两种方式都需要，请将第一次输出作为新任务处理。"
             )
-        if not self.mask_plan and not (self.video_dynamic_ocr and not self.is_picture):
+        if not self.mask_plan and not (self.video_dynamic_ocr and not self.is_image):
             raise RuntimeError("没有可修复区域。请先确认 OCR 结果或手动画框后确认。")
-        if self.video_dynamic_ocr and not self.is_picture:
+        if self.video_dynamic_ocr and not self.is_image:
             self._effective_dynamic_ocr_strategy()
-        self.append_output(tr["Main"]["SubtitleArea"].format(self.sub_areas))
+        self.append_output(tr["Main"]["OcrRegions"].format(self.ocr_regions))
         self.append_output(
             tr["Main"]["ABSection"].format(
                 str(self.ab_sections).replace("range", "")
                 if self.ab_sections else tr["Main"]["ABSectionAll"]
             )
         )
-        os.makedirs(os.path.dirname(self.video_out_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
         self.progress_total = 0
         tbar = tqdm(
             total=max(self.frame_count, 1), unit="frame", position=0,
             # 使用当前 stdout：GUI 子进程会把 stdout/stderr 接入消息桥，CLI
             # 则仍自然输出到控制台。此前强制 sys.__stdout__ 会绕过 GUI 日志。
-            file=sys.stdout, desc="Subtitle Removing",
+            file=sys.stdout, desc="Content Repair",
         )
         completed = False
         try:
             self.log_model()
-            if self.is_picture:
-                self.remove_image_subtitles()
+            if self.is_image:
+                self.repair_image()
                 self.update_progress(tbar, increment=1)
             else:
-                self.remove_video_subtitles(tbar)
+                self.repair_video(tbar)
             completed = True
         finally:
-            if self.video_cap is not None:
-                self.video_cap.release()
+            if self.media_capture is not None:
+                self.media_capture.release()
             if self.video_writer is not None:
                 self.video_writer.release()
             tbar.close()
             if not completed:
                 self._remove_temporary_video()
 
-        if not self.is_picture:
+        if not self.is_image:
             self.merge_audio_to_video()
-        self.append_output(tr["Main"]["FinishedProcessing"].format(self.video_out_path))
+        self.append_output(tr["Main"]["FinishedProcessing"].format(self.output_path))
         self.append_output(tr["Main"]["ProcessingTime"].format(round(time.time() - start_time)))
         self.isFinished = True
         self.progress_total = 100
@@ -449,16 +449,16 @@ if __name__ == "__main__":
     args = parse_args()
     config.set(config.interface, "en")
     tr.read(os.path.join(os.path.dirname(os.path.abspath(__file__)), "interface", "en.ini"), encoding="utf-8")
-    remover = SubtitleRemover(args.input)
+    remover = ContentRepairProcessor(args.input)
     if not is_video_or_image(args.input):
-        remover.append_output(f"Error: {remover.video_path} is not supported or is corrupted.")
+        remover.append_output(f"Error: {remover.media_path} is not supported or is corrupted.")
         raise SystemExit(1)
-    remover.sub_areas = args.subtitle_area_coords
+    remover.ocr_regions = args.ocr_region_coords
     if args.manual_area:
         remover.mask_plan = MaskPlan(
             mode=MaskMode.RECTANGLE,
             manual_regions=[tuple(region) for region in args.manual_area],
-            expand_pixels=config.subtitleAreaDeviationPixel.value,
+            expand_pixels=config.ocrMaskPadding.value,
         ).to_dict()
     remover.video_dynamic_ocr = args.dynamic_ocr
     remover.video_mask_strategy = args.ocr_strategy
@@ -466,5 +466,5 @@ if __name__ == "__main__":
     remover.ai_device = args.device
     remover.model_dir = args.model_dir
     if args.output:
-        remover.video_out_path = args.output
+        remover.output_path = args.output
     remover.run()

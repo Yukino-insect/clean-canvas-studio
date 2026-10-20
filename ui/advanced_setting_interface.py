@@ -103,14 +103,14 @@ class AdvancedSettingInterface(ScrollArea):
         self.interface_language = ComboBoxSettingCard(
             configItem=config.interface,
             icon=FluentIcon.LANGUAGE,
-            title=tr["SubtitleExtractorGUI"]["InterfaceLanguage"],
+            title=tr["CleanCanvasWindow"]["InterfaceLanguage"],
             content="切换语言后，部分界面文本需重启应用才能完全生效。",
             parent=self.advanced_group,
             texts=config.intefaceTexts.keys(),
         )
 
         self.mask_expand_pixels = RangeSettingCard(
-            configItem=config.subtitleAreaDeviationPixel,
+            configItem=config.ocrMaskPadding,
             icon=FluentIcon.ZOOM_IN,
             title="最终掩膜扩边（px）",
             content="用于已确认手工矩形；0 px 可追求最小区域，过大可能误伤背景。",

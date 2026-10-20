@@ -14,7 +14,7 @@ def create_mask(size: tuple[int, int], coords_list: list[tuple[int, int, int, in
     """
     height, width = size
     mask = np.zeros(size, dtype=np.uint8)
-    padding = config.subtitleAreaDeviationPixel.value
+    padding = config.ocrMaskPadding.value
     for xmin, xmax, ymin, ymax in coords_list:
         x1, y1 = max(0, xmin - padding), max(0, ymin - padding)
         x2, y2 = min(width - 1, xmax + padding), min(height - 1, ymax + padding)

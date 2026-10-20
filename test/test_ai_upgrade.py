@@ -20,7 +20,7 @@ from backend.inpaint.engine import (
     device_candidates,
 )
 from backend.inpaint.mask import normalize_regions, regions_to_mask
-from backend.main import SubtitleRemover
+from backend.main import ContentRepairProcessor
 from backend.masking import MaskMode, MaskPlan
 from ui.component.enhance_task_list_component import EnhanceTaskListComponent, EnhanceTaskStatus
 from ui.component.task_list_component import TaskListComponent, TaskStatus
@@ -186,8 +186,8 @@ class OutputAndEnhanceRequestTests(unittest.TestCase):
             output = root / "result.png"
             image = np.full((32, 48, 3), 180, dtype=np.uint8)
             self.assertTrue(cv2.imwrite(str(source), image))
-            remover = SubtitleRemover(str(source))
-            remover.video_out_path = str(output)
+            remover = ContentRepairProcessor(str(source))
+            remover.output_path = str(output)
             remover.mask_plan = MaskPlan(
                 mode=MaskMode.RECTANGLE,
                 manual_regions=[(2, 20, 2, 20)],

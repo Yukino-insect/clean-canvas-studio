@@ -1,8 +1,8 @@
-"""A compact visual color picker used by subtitle and mask settings.
+"""A compact visual color picker used by content-repair mask settings.
 
 It deliberately avoids making users type or remember RGB/HEX values.  The hue
 and saturation plane is continuous, while the brightness slider keeps black,
-white and muted subtitle colours equally accessible.
+white and muted text colours equally accessible.
 """
 
 from __future__ import annotations

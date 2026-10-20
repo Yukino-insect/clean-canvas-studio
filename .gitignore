@@ -352,14 +352,14 @@ $RECYCLE.BIN/
 /settings.ini
 /test*.py
 /subtitle.ini
-*_no_sub.mp4
+*_repaired.mp4
 /backend/ffmpeg/win_x64/ffmpeg.exe
 /test/pic_test/
 demo*.mp4
 out*.mp4
 /test*.py
 /test_*.mp4
-test*_no_sub*.mp4
+test*_repaired*.mp4
 /test/coods/
 /local_test/
 /backend/models/propainter/ProPainter.pth

@@ -11,7 +11,7 @@ def parse_args():
         "--output", "-o", required=False, type=str, default=None, help="输出路径（可选）"
     )
     parser.add_argument(
-        "--subtitle-area-coords", "-c", action="append", nargs=4, type=int, metavar=("YMIN", "YMAX", "XMIN", "XMAX"),
+        "--ocr-region-coords", "-c", action="append", nargs=4, type=int, metavar=("YMIN", "YMAX", "XMIN", "XMAX"),
         help="OCR 候选区域，可重复指定：YMIN YMAX XMIN XMAX"
     )
     parser.add_argument(
@@ -30,6 +30,6 @@ def parse_args():
         help="动态 OCR 的检测频率（默认：采样检测）",
     )
     args = parser.parse_args()
-    args.subtitle_area_coords = args.subtitle_area_coords or []
+    args.ocr_region_coords = args.ocr_region_coords or []
     args.manual_area = args.manual_area or []
     return args

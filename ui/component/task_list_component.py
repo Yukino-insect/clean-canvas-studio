@@ -24,7 +24,7 @@ class TaskStatus(Enum):
 @unique
 class TaskOptions(Enum):
     AB_SECTIONS = "ab_sections"
-    SUB_AREAS = "sub_areas"
+    OCR_REGIONS = "ocr_regions"
     OCR_REVIEWED = "ocr_reviewed"
     INPAINT_MODE = "inpaint_mode"
     AI_DEVICE = "ai_device"
@@ -63,9 +63,9 @@ class Task:
             return self._output_path
         save_directory = os.path.dirname(self.path) if not config.saveDirectory.value else config.saveDirectory.value
         if self.is_image:
-            output_path = os.path.abspath(os.path.join(save_directory, f'{Path(self.path).stem}_no_sub.png'))
+            output_path = os.path.abspath(os.path.join(save_directory, f'{Path(self.path).stem}_repaired.png'))
         else:
-            output_path = os.path.abspath(os.path.join(save_directory, f'{Path(self.path).stem}_no_sub.mp4'))
+            output_path = os.path.abspath(os.path.join(save_directory, f'{Path(self.path).stem}_repaired.mp4'))
         return output_path
 
     @output_path.setter

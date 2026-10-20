@@ -13,15 +13,15 @@ from backend.inpaint.mask import regions_to_mask
 
 
 @unittest.skipUnless(
-    os.environ.get("VSR_RUN_AI_INTEGRATION") == "1",
-    "set VSR_RUN_AI_INTEGRATION=1 only after preparing local AI model weights",
+    os.environ.get("CLEAN_CANVAS_RUN_AI_INTEGRATION") == "1",
+    "set CLEAN_CANVAS_RUN_AI_INTEGRATION=1 only after preparing local AI model weights",
 )
 class OptionalAIIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model_dir = os.environ.get("VSR_MODEL_DIR")
+        cls.model_dir = os.environ.get("CLEAN_CANVAS_MODEL_DIR")
         if not cls.model_dir:
-            raise unittest.SkipTest("VSR_MODEL_DIR must point to the prepared model cache")
+            raise unittest.SkipTest("CLEAN_CANVAS_MODEL_DIR must point to the prepared model cache")
 
     def test_anime_lama_repairs_a_masked_region(self):
         image = np.full((64, 96, 3), (90, 120, 160), dtype=np.uint8)

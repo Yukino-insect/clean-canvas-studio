@@ -23,10 +23,10 @@ from ui.image_format_interface import ImageFormatInterface
 
 
 # 项目内置图标由用户指定的 PNG 转换而来，避免运行时依赖用户目录中的绝对路径。
-PROJECT_ICON_PATH = "design/vsr.ico"
+PROJECT_ICON_PATH = "design/clean-canvas.ico"
 
 
-class SubtitleExtractorGUI(FluentWindow):
+class CleanCanvasWindow(FluentWindow):
     """应用外壳：负责页面注册、窗口状态和进程级资源清理。
 
     各业务页面自行维护任务与预览状态；此类只负责把它们放入 Fluent
@@ -55,7 +55,7 @@ class SubtitleExtractorGUI(FluentWindow):
         self.setWindowIcon(icon)
         # 系统标题栏不能只把字符串的一部分缩小。开发版本改在“关于”卡片中以
         # 辅助字号展示，标题栏只保留产品名，避免版本号喧宾夺主。
-        self.setWindowTitle(tr['SubtitleExtractorGUI']['Title'])
+        self.setWindowTitle(tr['CleanCanvasWindow']['Title'])
         # 创建界面布局
         self._create_layout()
         self._connectSignalToSlot()
@@ -102,7 +102,7 @@ class SubtitleExtractorGUI(FluentWindow):
         # 添加到主窗口作为子界面
         # 这是内容修复工作台，而不是应用“首页”；使用画笔图标能更准确表达
         # 去文字、掩膜编辑和图像修复的核心功能。
-        self.addSubInterface(self.homeInterface, FluentIcon.BRUSH, tr['SubtitleExtractorGUI']['Workspace'])
+        self.addSubInterface(self.homeInterface, FluentIcon.BRUSH, tr['CleanCanvasWindow']['Workspace'])
         self.addSubInterface(self.enhanceInterface, FluentIcon.PHOTO, "画质增强")
         self.addSubInterface(self.imageFormatInterface, FluentIcon.SAVE_AS, "图片转换")
         # 高级设置属于低频全局操作，放在底部能保持工作台导航的视觉重心。
@@ -193,7 +193,7 @@ if __name__ == '__main__':
     Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QtWidgets.QApplication(sys.argv)
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
-    window = SubtitleExtractorGUI()
+    window = CleanCanvasWindow()
     # 先设置透明, 再显示, 否则会有闪烁的效果
     window.setWindowOpacity(0.0)
     window.show()
